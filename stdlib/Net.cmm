@@ -1,0 +1,87 @@
+class Net;
+// Transparent file-or-URL I/O plus HTTP verbs, PHP-ish.
+//   Net.get("/etc/hostname")              -> file contents
+//   Net.get("https://example.com")        -> HTTP GET body
+//   Net.put(path_or_url, data)            -> write file / HTTP PUT
+//   Net.post(url, body)                   -> HTTP POST body (url only)
+//   Net.delete(path_or_url)               -> remove file / HTTP DELETE
+//   Net.patch(url, body)                  -> HTTP PATCH body (url only)
+// The *With variants take a List[String] of "Key: Value" header lines.
+
+fn isUrl(target: String) -> Bool {
+    a = target.startsWith("http://");
+    if (a) {
+        rTrue = true; return rTrue;
+    }
+    b = target.startsWith("https://");
+    return b;
+}
+
+fn get(target: String) -> String {
+    u = Net.isUrl(target);
+    if (u) {
+        r = Http.get(target);
+        return r;
+    }
+    r = File.read(target);
+    return r;
+}
+
+fn getWith(url: String, headers: List[String]) -> String {
+    r = Http.request("GET", url, headers, "");
+    return r;
+}
+
+fn put(target: String, data: String) -> Bool {
+    u = Net.isUrl(target);
+    if (u) {
+        noh: List[String];
+        resp = Http.request("PUT", target, noh, data);
+        rTrue = true; return rTrue;
+    }
+    ok = File.write(target, data);
+    return ok;
+}
+
+fn putWith(url: String, data: String, headers: List[String]) -> String {
+    r = Http.request("PUT", url, headers, data);
+    return r;
+}
+
+fn post(url: String, body: String) -> String {
+    noh: List[String];
+    r = Http.request("POST", url, noh, body);
+    return r;
+}
+
+fn postWith(url: String, body: String, headers: List[String]) -> String {
+    r = Http.request("POST", url, headers, body);
+    return r;
+}
+
+fn patch(url: String, body: String) -> String {
+    noh: List[String];
+    r = Http.request("PATCH", url, noh, body);
+    return r;
+}
+
+fn patchWith(url: String, body: String, headers: List[String]) -> String {
+    r = Http.request("PATCH", url, headers, body);
+    return r;
+}
+
+fn delete(target: String) -> Bool {
+    u = Net.isUrl(target);
+    if (u) {
+        noh: List[String];
+        resp = Http.request("DELETE", target, noh, "");
+        rTrue = true; return rTrue;
+    }
+    ok = File.delete(target);
+    return ok;
+}
+
+fn deleteWith(url: String, headers: List[String]) -> String {
+    r = Http.request("DELETE", url, headers, "");
+    return r;
+}

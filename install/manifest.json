@@ -1,0 +1,12 @@
+{
+  "cmm": {
+    "url": "https://github.com/ekettenburg/cmm/releases/latest/download/cmm-src.zip"
+  },
+  "zig": {
+    "linux-x86_64":   "https://github.com/example/cmm/releases/latest/download/zig-linux-x86_64.zip",
+    "linux-aarch64":  "https://github.com/example/cmm/releases/latest/download/zig-linux-aarch64.zip",
+    "macos-x86_64":   "https://github.com/example/cmm/releases/latest/download/zig-macos-x86_64.zip",
+    "macos-aarch64":  "https://github.com/example/cmm/releases/latest/download/zig-macos-aarch64.zip",
+    "windows-x86_64": "https://github.com/example/cmm/releases/latest/download/zig-windows-x86_64.zip"
+  }
+}

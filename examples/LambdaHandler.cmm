@@ -1,0 +1,40 @@
+class LambdaHandler;
+use Out;
+
+// An AWS Lambda custom-runtime handler. Compile this as the function's
+// `bootstrap` executable:
+//
+//     cmmc build LambdaHandler.cmm -o bootstrap
+//     zip function.zip bootstrap        # deploy to a provided.al2023 function
+//
+// The per-invocation work lives in serveOne(), which RETURNS every call, so
+// its memory arena is reclaimed each time and the long-lived loop stays flat.
+
+fn handle(event: String) -> String {
+    doc = Json.decode(event);
+    name = doc.getStr("name");
+    blank = (name == "");
+    if (blank) {
+        name = "world";
+    }
+    greeting = ("Hello, " + name);
+    out = {"statusCode": 200, "body": greeting};
+    resp = Json.encode(out);
+    return resp;
+}
+
+fn serveOne() {
+    event = Lambda.next();              // blocks until the next invocation
+    result = handle(event);
+    ok = Lambda.success(result);        // post the response
+    peak = Sys.peakRss();
+    msg = ("done req=" + Lambda.requestId());
+    msg2 = (msg + (" peak_rss_bytes=" + peak));
+    Lambda.log(msg2);                   // -> stderr -> CloudWatch
+}
+
+fn main() {
+    while (true) {
+        serveOne();
+    }
+}

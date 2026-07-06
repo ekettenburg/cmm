@@ -1,0 +1,5 @@
+class Hello;
+
+fn main() {
+    Console.println("Hello, world!");
+}

@@ -1,0 +1,20 @@
+class Counter;
+
+@count: Int;
+
+fn increment() {
+    @count++;
+}
+
+fn value() -> Int {
+    result = @count;
+    return result;
+}
+
+fn main() {
+    increment();
+    increment();
+    increment();
+    n = value();
+    Console.println(n);
+}

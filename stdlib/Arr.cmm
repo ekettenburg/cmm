@@ -1,0 +1,148 @@
+class Arr;
+// Array/list helpers (PHP-ish). Generic over List[Data], so they work on a
+// list of any element type. Call statically, e.g. Arr.range(0, 5).
+// Basic ops (add/get/set/length/contains/remove) are native methods on List.
+
+fn range(start: Int, end: Int) -> List[Int] {
+    out: List[Int];
+    i = start;
+    while (i < end) {
+        out.add(i);
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn first(items: List[Data]) -> Data {
+    x = items.get(0);
+    return x;
+}
+
+fn last(items: List[Data]) -> Data {
+    n = items.length();
+    i = (n - 1);
+    x = items.get(i);
+    return x;
+}
+
+fn isEmpty(items: List[Data]) -> Bool {
+    n = items.length();
+    r = (n == 0);
+    return r;
+}
+
+fn reverse(items: List[Data]) -> List[Data] {
+    out: List[Data];
+    n = items.length();
+    i = 0;
+    while (i < n) {
+        j = (n - 1);
+        k = (j - i);
+        x = items.get(k);
+        out.add(x);
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn concat(a: List[Data], b: List[Data]) -> List[Data] {
+    out: List[Data];
+    na = a.length();
+    i = 0;
+    while (i < na) {
+        x = a.get(i);
+        out.add(x);
+        i = (i + 1);
+    }
+    nb = b.length();
+    j = 0;
+    while (j < nb) {
+        y = b.get(j);
+        out.add(y);
+        j = (j + 1);
+    }
+    return out;
+}
+
+fn slice(items: List[Data], start: Int, end: Int) -> List[Data] {
+    out: List[Data];
+    n = items.length();
+    i = start;
+    while (i < end) {
+        if (i < n) {
+            x = items.get(i);
+            out.add(x);
+        }
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn indexOf(items: List[Data], value: Data) -> Int {
+    n = items.length();
+    i = 0;
+    while (i < n) {
+        x = items.get(i);
+        if (x == value) {
+            return i;
+        }
+        i = (i + 1);
+    }
+    miss = (0 - 1);
+    return miss;
+}
+
+fn contains(items: List[Data], value: Data) -> Bool {
+    idx = Arr.indexOf(items, value);
+    r = (idx >= 0);
+    return r;
+}
+
+fn push(items: List[Data], value: Data) -> List[Data] {
+    items.add(value);
+    return items;
+}
+
+fn unique(items: List[Data]) -> List[Data] {
+    out: List[Data];
+    n = items.length();
+    i = 0;
+    while (i < n) {
+        x = items.get(i);
+        seen = Arr.contains(out, x);
+        if (seen) {
+            i = (i + 1);
+        } else {
+            out.add(x);
+            i = (i + 1);
+        }
+    }
+    return out;
+}
+
+fn sum(items: List[Int]) -> Int {
+    total = 0;
+    n = items.length();
+    i = 0;
+    while (i < n) {
+        x = items.get(i);
+        total = (total + x);
+        i = (i + 1);
+    }
+    return total;
+}
+
+fn join(items: List[Data], sep: String) -> String {
+    out = "";
+    n = items.length();
+    i = 0;
+    while (i < n) {
+        x = items.get(i);
+        if (i > 0) {
+            out = (out + sep);
+        }
+        out = (out + x);
+        i = (i + 1);
+    }
+    return out;
+}

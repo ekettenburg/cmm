@@ -1,0 +1,94 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "C-- (cmm)",
+  "scopeName": "source.cmm",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#class-decl" },
+    { "include": "#use-decl" },
+    { "include": "#fn-decl" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#namespaces" },
+    { "include": "#classvar" },
+    { "include": "#numbers" },
+    { "include": "#call" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.cmm", "begin": "//", "end": "$" },
+        { "name": "comment.block.cmm", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.cmm",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.cmm", "match": "\\\\[nrt0\"\\\\]" }
+      ]
+    },
+    "class-decl": {
+      "match": "\\b(native\\s+)?(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.modifier.cmm" },
+        "2": { "name": "storage.type.class.cmm" },
+        "3": { "name": "entity.name.type.class.cmm" }
+      }
+    },
+    "use-decl": {
+      "match": "\\b(use)\\b",
+      "name": "keyword.control.import.cmm"
+    },
+    "fn-decl": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.cmm" },
+        "2": { "name": "entity.name.function.cmm" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.cmm", "match": "\\b(if|else|for|in|while|return|run|wait)\\b" },
+        { "name": "keyword.operator.logical.cmm", "match": "\\b(not|and|or)\\b" },
+        { "name": "keyword.other.cmm", "match": "\\b(empty)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.cmm", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.cmm", "match": "\\b(__FILE__|__DIR__)\\b" }
+      ]
+    },
+    "types": {
+      "name": "support.type.cmm",
+      "match": "\\b(Int|Float|String|Bool|Data|List|Dict|Void|Job|Socket)\\b"
+    },
+    "namespaces": {
+      "name": "support.class.builtin.cmm",
+      "match": "\\b(Console|Math|File|Date|Json|Http|Sys|Lambda|Zip|Crypto|Base64|Mysql|Preg)\\b"
+    },
+    "classvar": {
+      "name": "variable.other.member.cmm",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.cmm", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.cmm", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "call": {
+      "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.cmm" } }
+    },
+    "operators": {
+      "name": "keyword.operator.cmm",
+      "match": "(\\+|\\-|\\*|/|%|==|!=|<=|>=|<|>|=)"
+    }
+  }
+}

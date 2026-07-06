@@ -1,0 +1,20 @@
+class Out;
+// Flexible printing that accepts any value (Int, Float, Bool, String, List,
+// Dict, Data, objects). Out.line prints with a trailing newline; Out.dump
+// renders structured values as JSON.
+
+fn print(x: Data) -> Bool {
+    Console.print(x);
+    rTrue = true; return rTrue;
+}
+
+fn line(x: Data) -> Bool {
+    Console.println(x);
+    rTrue = true; return rTrue;
+}
+
+fn dump(x: Data) -> Bool {
+    s = Json.encode(x);
+    Console.println(s);
+    rTrue = true; return rTrue;
+}

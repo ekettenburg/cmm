@@ -1,0 +1,28 @@
+class Bank;
+
+@balance: Int;
+
+fn deposit(amount: Int) {
+    use @balance {
+        @balance = (@balance + amount);
+    }
+}
+
+fn addMany() {
+    i = 0;
+    while (i < 1000) {
+        deposit(1);
+        i++;
+    }
+}
+
+fn main() {
+    j1 = run addMany();
+    j2 = run addMany();
+    j3 = run addMany();
+    x = wait j1;
+    y = wait j2;
+    z = wait j3;
+    Console.print("balance = ");
+    Console.println(@balance);
+}

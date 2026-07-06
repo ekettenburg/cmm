@@ -1,0 +1,99 @@
+class Str;
+// String manipulation helpers (PHP-ish). Call statically, e.g.
+//   Str.repeat("ab", 3)  ->  "ababab"
+// Basic ops (upper/lower/trim/split/replace/contains/...) are built into the
+// native String type and can be called directly on a value: "hi".upper().
+
+fn repeat(s: String, n: Int) -> String {
+    out = "";
+    i = 0;
+    while (i < n) {
+        out = (out + s);
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn join(parts: List[String], sep: String) -> String {
+    out = "";
+    n = parts.length();
+    i = 0;
+    while (i < n) {
+        piece = parts.get(i);
+        if (i > 0) {
+            out = (out + sep);
+        }
+        out = (out + piece);
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn implode(parts: List[String], sep: String) -> String {
+    r = Str.join(parts, sep);
+    return r;
+}
+
+fn explode(s: String, sep: String) -> List[String] {
+    parts = s.split(sep);
+    return parts;
+}
+
+fn replaceAll(s: String, find: String, rep: String) -> String {
+    parts = s.split(find);
+    r = Str.join(parts, rep);
+    return r;
+}
+
+fn count(s: String, sub: String) -> Int {
+    parts = s.split(sub);
+    n = parts.length();
+    r = (n - 1);
+    return r;
+}
+
+fn reverse(s: String) -> String {
+    out = "";
+    n = s.length();
+    i = 0;
+    while (i < n) {
+        j = (n - 1);
+        k = (j - i);
+        ch = s.substring(k, (k + 1));
+        out = (out + ch);
+        i = (i + 1);
+    }
+    return out;
+}
+
+fn padLeft(s: String, width: Int, ch: String) -> String {
+    out = s;
+    len = out.length();
+    while (len < width) {
+        out = (ch + out);
+        len = out.length();
+    }
+    return out;
+}
+
+fn padRight(s: String, width: Int, ch: String) -> String {
+    out = s;
+    len = out.length();
+    while (len < width) {
+        out = (out + ch);
+        len = out.length();
+    }
+    return out;
+}
+
+fn capitalize(s: String) -> String {
+    n = s.length();
+    if (n < 1) {
+        return s;
+    }
+    head = s.substring(0, 1);
+    headUp = head.upper();
+    tail = s.substring(1, n);
+    r = (headUp + tail);
+    return r;
+}

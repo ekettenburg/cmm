@@ -1,0 +1,45 @@
+{
+  "name": "cmm-language",
+  "displayName": "C-- (cmm)",
+  "description": "Syntax highlighting and live diagnostics for the C-- (cmm) language.",
+  "version": "0.7.0",
+  "publisher": "cmm",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages", "Linters"],
+  "activationEvents": ["onLanguage:cmm"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [{
+      "id": "cmm",
+      "aliases": ["C--", "cmm"],
+      "extensions": [".cmm"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "cmm",
+      "scopeName": "source.cmm",
+      "path": "./syntaxes/cmm.tmLanguage.json"
+    }],
+    "configuration": {
+      "title": "C-- (cmm)",
+      "properties": {
+        "cmm.compilerPath": {
+          "type": "string",
+          "default": "cmmc",
+          "description": "Path to the cmmc compiler used for diagnostics (runs `cmmc check`)."
+        },
+        "cmm.lint.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report compiler errors as you edit."
+        },
+        "cmm.lint.run": {
+          "type": "string",
+          "enum": ["onType", "onSave"],
+          "default": "onType",
+          "description": "Run diagnostics as you type, or only when the file is saved."
+        }
+      }
+    }
+  }
+}

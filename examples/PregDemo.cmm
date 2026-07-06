@@ -1,0 +1,37 @@
+class PregDemo;
+// PHP-style regex. Patterns are delimited like /re/flags (flags: i, m, s).
+// In cmm string literals, write regex backslashes doubled: "\\d", "\\s", "\\w".
+fn dump(label: String, items: List[String]) {
+    Console.print(label);
+    Console.print(" = [");
+    n = items.length();
+    i = 0;
+    while i < n {
+        if i > 0 { Console.print(", "); }
+        Console.print(items.get(i));
+        i = i + 1;
+    }
+    Console.println("]");
+}
+fn main() {
+    // capture groups
+    dump("match", Preg.match("/(\\d{4})-(\\d{2})-(\\d{2})/", "date: 2026-06-30."));
+
+    // all matches
+    dump("all", Preg.matchAll("/\\w+/", "the quick brown fox"));
+
+    // replace with backreferences
+    swapped = Preg.replace("/(\\w+)\\s+(\\w+)/", "$2 $1", "hello world");
+    Console.print("replace = ");
+    Console.println(swapped);
+
+    // split
+    dump("split", Preg.split("/\\s*,\\s*/", "a, b ,c,  d"));
+
+    // test + quote
+    ok = Preg.test("/^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$/i", "User@Example.COM");
+    Console.print("email valid = ");
+    Console.println(ok);
+    Console.print("quoted = ");
+    Console.println(Preg.quote("1+1=2? (yes)"));
+}

@@ -1,0 +1,189 @@
+class Aws;
+
+// AWS Signature Version 4 signing, implemented in pure cmm on top of the
+// Crypto natives (SHA-256 / HMAC-SHA256). Produces the Authorization header
+// value for an AWS request. Transport is left to Http.send / Http.request.
+//
+// Everything is String / Dict[String,String] to keep the value model simple.
+
+// RFC-3986 percent-encoding as AWS expects it. Unreserved characters pass
+// through untouched; everything else becomes %XX with UPPERCASE hex. When
+// encodeSlash is false, '/' is preserved (used for S3 object key paths).
+fn uriEncode(s: String, encodeSlash: Bool) -> String {
+    unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~";
+    out = "";
+    n = s.length();
+    i = 0;
+    while i < n {
+        end = i + 1;
+        c = s.substring(i, end);
+        keep = false;
+        if unreserved.contains(c) { keep = true; }
+        if c == "/" {
+            if encodeSlash { keep = false; }
+            else { keep = true; }
+        }
+        if keep { out = out + c; }
+        else {
+            hx = Crypto.hex(c);
+            hxu = hx.upper();
+            enc = "%" + hxu;
+            out = out + enc;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// In-place insertion sort of a string list (ascending, bytewise).
+fn sortStrings(items: List[String]) {
+    n = items.length();
+    i = 1;
+    while i < n {
+        j = i;
+        while j > 0 {
+            left = j - 1;
+            a = items.get(left);
+            b = items.get(j);
+            if a > b {
+                items.set(left, b);
+                items.set(j, a);
+                j = j - 1;
+            }
+            else {
+                j = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Build a canonical query string from a Dict of param -> value. Keys and
+// values are URI-encoded (slash encoded) and sorted by encoded key.
+fn canonicalQuery(params: Dict[String, String]) -> String {
+    ks = params.keys();
+    encKeys: List[String];
+    pairs = {"_": ""};
+    for k in ks {
+        ek = uriEncode(k, true);
+        v = params.get(k);
+        ev = uriEncode(v, true);
+        encKeys.add(ek);
+        pairs.set(ek, ev);
+    }
+    sortStrings(encKeys);
+    out = "";
+    n = encKeys.length();
+    i = 0;
+    while i < n {
+        ek = encKeys.get(i);
+        ev = pairs.get(ek);
+        piece = ek + "=";
+        piece = piece + ev;
+        if i > 0 { out = out + "&"; }
+        out = out + piece;
+        i = i + 1;
+    }
+    return out;
+}
+
+// Core SigV4 signer.
+//   req    : scalar inputs -> method, uri, query, payloadHash, region,
+//            service, accessKey, secretKey, amzDate, dateStamp
+//   headers: the HTTP headers to sign (must include host and x-amz-date)
+// Returns a Dict with authorization, signedHeaders, signature, and the
+// intermediate canonicalRequest / stringToSign (handy for debugging).
+fn signHeaders(req: Dict[String, String], headers: Dict[String, String]) -> Dict[String, String] {
+    method = req.get("method");
+    uri = req.get("uri");
+    query = req.get("query");
+    payloadHash = req.get("payloadHash");
+    region = req.get("region");
+    service = req.get("service");
+    accessKey = req.get("accessKey");
+    secretKey = req.get("secretKey");
+    amzDate = req.get("amzDate");
+    dateStamp = req.get("dateStamp");
+
+    // canonical + signed headers (sorted by lowercased name)
+    ks = headers.keys();
+    names: List[String];
+    lowerToVal = {"_": ""};
+    for k in ks {
+        lk = k.lower();
+        raw = headers.get(k);
+        tv = raw.trim();
+        names.add(lk);
+        lowerToVal.set(lk, tv);
+    }
+    sortStrings(names);
+
+    canonHeaders = "";
+    signedHeaders = "";
+    hn = names.length();
+    i = 0;
+    while i < hn {
+        nm = names.get(i);
+        val = lowerToVal.get(nm);
+        line = nm + ":";
+        line = line + val;
+        line = line + "\n";
+        canonHeaders = canonHeaders + line;
+        if i > 0 { signedHeaders = signedHeaders + ";"; }
+        signedHeaders = signedHeaders + nm;
+        i = i + 1;
+    }
+
+    // canonical request
+    cr = method;
+    cr = cr + "\n";
+    cr = cr + uri;
+    cr = cr + "\n";
+    cr = cr + query;
+    cr = cr + "\n";
+    cr = cr + canonHeaders;
+    cr = cr + "\n";
+    cr = cr + signedHeaders;
+    cr = cr + "\n";
+    cr = cr + payloadHash;
+    crHash = Crypto.sha256Hex(cr);
+
+    // scope + string to sign
+    scope = dateStamp + "/";
+    scope = scope + region;
+    scope = scope + "/";
+    scope = scope + service;
+    scope = scope + "/aws4_request";
+
+    sts = "AWS4-HMAC-SHA256\n";
+    sts = sts + amzDate;
+    sts = sts + "\n";
+    sts = sts + scope;
+    sts = sts + "\n";
+    sts = sts + crHash;
+
+    // signing key derivation
+    kSecret = "AWS4" + secretKey;
+    kDate = Crypto.hmacSha256(kSecret, dateStamp);
+    kRegion = Crypto.hmacSha256(kDate, region);
+    kService = Crypto.hmacSha256(kRegion, service);
+    kSigning = Crypto.hmacSha256(kService, "aws4_request");
+    signature = Crypto.hmacSha256Hex(kSigning, sts);
+
+    // authorization header value
+    cred = accessKey + "/";
+    cred = cred + scope;
+    auth = "AWS4-HMAC-SHA256 Credential=";
+    auth = auth + cred;
+    auth = auth + ", SignedHeaders=";
+    auth = auth + signedHeaders;
+    auth = auth + ", Signature=";
+    auth = auth + signature;
+
+    res = {"authorization": auth};
+    res.set("signedHeaders", signedHeaders);
+    res.set("signature", signature);
+    res.set("canonicalRequest", cr);
+    res.set("stringToSign", sts);
+    return res;
+}

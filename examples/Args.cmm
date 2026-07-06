@@ -1,0 +1,24 @@
+class Args;
+use Out;
+
+// Command-line arguments are available via Sys.args(), which returns a
+// List[String]. As with C / PHP / Python, args[0] is the program name and
+// the user-supplied arguments follow.
+
+fn main() {
+    args = Sys.args();
+
+    Out.print("argc = ");
+    n = args.length();
+    Out.line(n);
+
+    Out.line("arguments:");
+    i = 0;
+    for a in args {
+        Out.print("  [");
+        Out.print(i);
+        Out.print("] ");
+        Out.line(a);
+        i = i + 1;
+    }
+}
