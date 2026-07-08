@@ -20,7 +20,6 @@
 /* ---- entropy / RNG ---- */
 #define MBEDTLS_ENTROPY_C
 #define MBEDTLS_CTR_DRBG_C
-#define MBEDTLS_NO_PLATFORM_ENTROPY  /* we feed OS entropy via entropy_poll */
 
 /* ---- big integers & elliptic curves (ECDHE + ECDSA) ---- */
 #define MBEDTLS_BIGNUM_C

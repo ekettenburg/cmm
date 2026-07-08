@@ -4,7 +4,7 @@ use Out;
 // An AWS Lambda custom-runtime handler. Compile this as the function's
 // `bootstrap` executable:
 //
-//     cmmc build LambdaHandler.cmm -o bootstrap
+//     cmm build LambdaHandler.cmm -o bootstrap
 //     zip function.zip bootstrap        # deploy to a provided.al2023 function
 //
 // The per-invocation work lives in serveOne(), which RETURNS every call, so

@@ -25,8 +25,8 @@
       "properties": {
         "cmm.compilerPath": {
           "type": "string",
-          "default": "cmmc",
-          "description": "Path to the cmmc compiler used for diagnostics (runs `cmmc check`)."
+          "default": "cmm",
+          "description": "Path to the cmm compiler used for diagnostics (runs `cmm check`)."
         },
         "cmm.lint.enable": {
           "type": "boolean",

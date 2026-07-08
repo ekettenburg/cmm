@@ -1,5 +1,5 @@
 /* embed.c — generate embedded_runtime.h from the runtime sources.
- * Produces byte arrays so cmmc can write the runtime to a temp dir at
+ * Produces byte arrays so cmm can write the runtime to a temp dir at
  * build time, making the compiler a single self-contained binary. */
 #include <stdio.h>
 #include <stdlib.h>

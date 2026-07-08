@@ -1,6 +1,6 @@
 class StdDemo;
 // Demonstrates the cmm standard library: Str, Arr, Out, Net.
-// Run with:  cmmc run examples/StdDemo.cmm
+// Run with:  cmm run examples/StdDemo.cmm
 use Str;
 use Arr;
 use Out;

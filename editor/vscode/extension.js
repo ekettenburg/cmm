@@ -1,4 +1,4 @@
-// C-- (cmm) VS Code extension: live diagnostics by running `cmmc check`.
+// C-- (cmm) VS Code extension: live diagnostics by running `cmm check`.
 const vscode = require("vscode");
 const cp = require("child_process");
 const fs = require("fs");
@@ -29,7 +29,7 @@ function parseDiagnostics(output) {
     // Highlight from the reported column to the end of that word/line.
     const range = new vscode.Range(line, col, line, col + 1);
     const d = new vscode.Diagnostic(range, m[5], sev);
-    d.source = "cmmc";
+    d.source = "cmm";
     out.push({ range, diag: d });
   }
   return out;
@@ -41,7 +41,7 @@ function lint(document) {
     diagnostics.delete(document.uri);
     return;
   }
-  const cmmc = config().get("compilerPath", "cmmc");
+  const cmmPath = config().get("compilerPath", "cmm");
 
   // Write current (possibly unsaved) content to a temp file that keeps the
   // same basename, so the classname==filename rule is satisfied.
@@ -54,17 +54,17 @@ function lint(document) {
     return;
   }
 
-  cp.execFile(cmmc, ["check", tmp], { timeout: 10000 }, (err, stdout, stderr) => {
+  cp.execFile(cmmPath, ["check", tmp], { timeout: 10000 }, (err, stdout, stderr) => {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
 
     if (err && err.code === "ENOENT") {
       // compiler not found — surface a single actionable message once
       const d = new vscode.Diagnostic(
         new vscode.Range(0, 0, 0, 1),
-        `cmmc not found (set "cmm.compilerPath"). Diagnostics disabled.`,
+        `cmm not found (set "cmm.compilerPath"). Diagnostics disabled.`,
         vscode.DiagnosticSeverity.Warning
       );
-      d.source = "cmmc";
+      d.source = "cmm";
       diagnostics.set(document.uri, [d]);
       return;
     }

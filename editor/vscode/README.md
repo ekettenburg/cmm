@@ -9,20 +9,20 @@ language.
   namespaces (`Console`, `Crypto`, `Mysql`, `Preg`, …), strings, comments,
   numbers, `@class` variables, and magic constants.
 - **Live diagnostics (linting)** — errors from the compiler appear in the
-  Problems panel and as squiggles as you type. Powered by `cmmc check`, so the
+  Problems panel and as squiggles as you type. Powered by `cmm check`, so the
   messages match exactly what a build would report.
 
 ## Requirements
 
-The `cmmc` compiler must be installed. By default the extension runs `cmmc`
+The `cmm` compiler must be installed. By default the extension runs `cmm`
 from your `PATH`; point it elsewhere with the **`cmm.compilerPath`** setting
-(e.g. `/path/to/cmm/bootstrap/cmmc`).
+(e.g. `/path/to/cmm/bootstrap/cmm`).
 
 ## Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `cmm.compilerPath` | `cmmc` | Path to the `cmmc` binary used for diagnostics. |
+| `cmm.compilerPath` | `cmm` | Path to the `cmm` binary used for diagnostics. |
 | `cmm.lint.enable` | `true` | Turn diagnostics on/off. |
 | `cmm.lint.run` | `onType` | `onType` (as you edit) or `onSave`. |
 
@@ -44,6 +44,6 @@ map the generated C back to your `.cmm` source, so `gdb`/`lldb` step through the
 original file:
 
 ```sh
-cmmc build myprog.cmm -o myprog --debug
+cmm build myprog.cmm -o myprog --debug
 gdb ./myprog
 ```

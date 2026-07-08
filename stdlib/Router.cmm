@@ -1,0 +1,91 @@
+class Router;
+
+// Path router for Lambda Function URL / dev-server requests.
+//
+// cmm has no reflection or function pointers, so the router can't call your
+// classes directly. You register routes as (method, pattern, handler-id) into a
+// route table you own, and Router.match(routes, req) returns the matching
+// handler id + captured path params. You dispatch on the handler id with a
+// small if/else to the real class.method.
+//
+// Patterns use `/literal/{param}` segments; `{param}` captures that segment;
+// method "*" matches any verb. The route table is a `List[Data]` — create one
+// with Router.create() (or declare your own `@routes: List[Data];`).
+
+fn create() -> List[Data] {
+    rs: List[Data];
+    return rs;
+}
+
+fn add(routes: List[Data], method: String, pattern: String, handler: String) {
+    r = {"method": method, "pattern": pattern, "handler": handler};
+    routes.add(r);
+}
+
+// verb helpers
+fn get(routes: List[Data], pattern: String, handler: String)    { add(routes, "GET", pattern, handler); }
+fn post(routes: List[Data], pattern: String, handler: String)   { add(routes, "POST", pattern, handler); }
+fn put(routes: List[Data], pattern: String, handler: String)    { add(routes, "PUT", pattern, handler); }
+fn patch(routes: List[Data], pattern: String, handler: String)  { add(routes, "PATCH", pattern, handler); }
+fn delete(routes: List[Data], pattern: String, handler: String) { add(routes, "DELETE", pattern, handler); }
+fn any(routes: List[Data], pattern: String, handler: String)    { add(routes, "*", pattern, handler); }
+
+// Match a normalized request (from Http.parseRequest) to a route.
+// Returns Dict[String,String]: reserved "__matched" ("true"/"false") and
+// "__handler", plus one entry per captured path param.
+fn match(routes: List[Data], req: Data) -> Dict[String, String] {
+    reqMethod = req.getStr("method");
+    reqPath = req.getStr("path");
+    reqSegs = reqPath.split("/");
+    reqLen = reqSegs.length();
+
+    result = {"__matched": "false", "__handler": ""};
+    n = routes.length();
+    i = 0;
+    while (i < n) {
+        route = routes.get(i);
+        rm = route.getStr("method");
+        okM = false;
+        if (rm == "*") { okM = true; }
+        if (rm == reqMethod) { okM = true; }
+        if (okM) {
+            pat = route.getStr("pattern");
+            patSegs = pat.split("/");
+            plen = patSegs.length();
+            if (plen == reqLen) {
+                cand = {"__matched": "true", "__handler": ""};
+                h = route.getStr("handler");
+                cand.set("__handler", h);
+                good = true;
+                j = 0;
+                while (j < plen) {
+                    ps = patSegs.get(j);
+                    rs = reqSegs.get(j);
+                    isParam = ps.startsWith("{");
+                    if (isParam) {
+                        end = ps.length() - 1;
+                        name = ps.substring(1, end);
+                        cand.set(name, rs);
+                    } else {
+                        eq = ps == rs;
+                        if (not eq) {
+                            good = false;
+                            j = plen;
+                        }
+                    }
+                    j = j + 1;
+                }
+                if (good) {
+                    result = cand;
+                    i = n;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn isMatch(m: Dict[String, String]) -> Bool { v = m.get("__matched"); r = v == "true"; return r; }
+fn handler(m: Dict[String, String]) -> String { v = m.get("__handler"); return v; }
+fn param(m: Dict[String, String], name: String) -> String { v = m.get(name); return v; }

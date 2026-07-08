@@ -1,0 +1,44 @@
+class MysqlTlsDemo;
+
+// Connect to a TLS-only MySQL server such as TiDB Cloud.
+//
+// Mysql.connectTls(host, port, user, pass, db, ca) performs the MySQL STARTTLS
+// upgrade, then verifies the server certificate before authenticating.
+//
+// The `ca` argument selects the trust anchor:
+//   - a PEM string (e.g. File.read("ca.pem")) verifies against that CA, or
+//   - a file path to a .pem is read for you, or
+//   - "" verifies against cmm's built-in Mozilla root bundle, which works when
+//     the server presents a publicly-trusted certificate (TiDB Cloud does).
+//
+// Set CMMC_TLS_INSECURE=1 in the environment to skip verification (testing only).
+
+fn main() -> Int {
+    host = "gateway01.us-east-1.prod.aws.tidbcloud.com";
+    port = 4000;
+    user = "xxxxxxxxxxx.root";
+    pass = "your-password";
+    db   = "test";
+
+    // Verify against a CA file you downloaded from your provider:
+    ca = File.read("ca.pem");
+    conn = Mysql.connectTls(host, port, user, pass, db, ca);
+
+    // ...or verify against the built-in public roots instead:
+    // conn = Mysql.connectTls(host, port, user, pass, db, "");
+
+    if (conn < 0) {
+        Console.print("connect failed: ");
+        Console.println(Mysql.error(conn));
+        return 1;
+    }
+    rows = Mysql.query(conn, "SELECT VERSION() AS v");
+    n = rows.length();
+    if (n > 0) {
+        row = rows.get(0);
+        Console.print("connected over TLS; server: ");
+        Console.println(row.getStr("v"));
+    }
+    Mysql.close(conn);
+    return 0;
+}

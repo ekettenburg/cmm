@@ -18,8 +18,8 @@ fn main() {
 ```
 
 ```
-cmmc run hello.cmm           # compile + run
-cmmc build hello.cmm -o hi   # compile to a native binary
+cmm run hello.cmm           # compile + run
+cmm build hello.cmm -o hi   # compile to a native binary
 ```
 
 Every program has one entry class containing `fn main()`. Execution constructs

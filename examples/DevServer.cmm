@@ -1,0 +1,78 @@
+class DevServer;
+use Request;
+
+// Local multi-threaded dev server. Each worker runs the SAME loop you'd run on
+// a Lambda function URL — only the source/sink calls differ:
+//
+//   Lambda:  ev = Lambda.next();  ...  Lambda.success(resp);
+//   Local:   ev = Serve.next();   ...  Serve.respond(resp);
+//
+// The current connection is thread-local, so a pool of `run worker()` threads
+// handles requests concurrently with no shared state.
+
+fn reply(status: Int, body: String) -> String {
+    bj = Json.encode(body);
+    r = "{\"statusCode\":";
+    r = r + status.toStr();
+    r = r + ",\"headers\":{\"content-type\":\"text/plain\"},\"body\":";
+    r = r + bj;
+    r = r + "}";
+    return r;
+}
+
+// Application handler — a pure function of the normalized request.
+fn handle(req: Data) -> String {
+    out = Request.method(req);
+    out = out + " ";
+    out = out + Request.path(req);
+    out = out + " | query.name=";
+    out = out + Request.query(req, "name");
+    out = out + " | json.name=";
+    jn = Request.json(req);
+    out = out + jn.getStr("name");
+    out = out + " | form.name=";
+    out = out + Request.form(req, "name");
+    out = out + " | files=";
+    files = Request.files(req);
+    nf = files.length();
+    out = out + nf.toStr();
+    if (nf > 0) {
+        f0 = files.get(0);
+        out = out + " (";
+        out = out + f0.getStr("filename");
+        out = out + " ";
+        sz = f0.getInt("size");
+        out = out + sz.toStr();
+        out = out + " bytes)";
+    }
+    r = reply(200, out);
+    return r;
+}
+
+fn worker() {
+    loop = true;
+    while (loop) {
+        ev = Serve.next();
+        req = Http.parseRequest(ev);
+        resp = handle(req);
+        Serve.respond(resp);
+    }
+}
+
+fn main() -> Int {
+    ok = Serve.listen(8080);
+    if (not ok) {
+        Console.println("listen failed");
+        return 1;
+    }
+    Console.println("dev server (4 workers) on http://127.0.0.1:8080");
+    j1 = run worker();
+    j2 = run worker();
+    j3 = run worker();
+    j4 = run worker();
+    wait j1;
+    wait j2;
+    wait j3;
+    wait j4;
+    return 0;
+}

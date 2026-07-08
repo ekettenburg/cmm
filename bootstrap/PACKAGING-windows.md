@@ -1,12 +1,12 @@
 # Packaging C-- as a portable Windows toolchain
 
 Goal: a single folder you can copy to any Windows machine — no installer, no
-admin, no "install a C compiler first" — where `cmmc.exe` finds a **bundled**
+admin, no "install a C compiler first" — where `cmm.exe` finds a **bundled**
 C compiler sitting next to it.
 
 ```
 cmm-win64\
-  cmmc.exe        the C-- compiler (the C-- runtime is embedded inside it)
+  cmm.exe          the C-- compiler (the C-- runtime is embedded inside it)
   bin\             the bundled C backend: gcc.exe (or tcc.exe) + its support files
   lib\             extra import libraries (e.g. OpenSSL) — optional, for TLS
   include\         extra headers (e.g. openssl\) — optional, for TLS
@@ -14,7 +14,7 @@ cmm-win64\
   README.txt
 ```
 
-`cmmc.exe` resolves its C backend in this order:
+`cmm.exe` resolves its C backend in this order:
 
 1. `--cc <path>` on the command line,
 2. the `LANGC_CC` environment variable,
@@ -22,11 +22,11 @@ cmm-win64\
    is found it also adds `<folder>\include` and `<folder>\lib` to the compile,
 4. a system `clang`/`gcc`/`cl` on `PATH`.
 
-So if `bin\gcc.exe` exists next to `cmmc.exe`, it is used automatically and the
-package is fully self-contained. Verify with `cmmc build foo.cmm -v` — the
+So if `bin\gcc.exe` exists next to `cmm.exe`, it is used automatically and the
+package is fully self-contained. Verify with `cmm build foo.cmm -v` — the
 first line prints e.g. `cc: C:\...\bin\gcc.exe  [gcc-like, bundled]`.
 
-`cmmc.exe` itself only links `KERNEL32.dll` and `msvcrt.dll`, which ship with
+`cmm.exe` itself only links `KERNEL32.dll` and `msvcrt.dll`, which ship with
 Windows, so the compiler binary needs nothing else.
 
 ---
@@ -40,14 +40,14 @@ and libwinpthread relative to the `gcc.exe` location, so it works from any path.
    "GCC ... UCRT runtime" Zip. (LLVM/Clang variants also work.)
 2. Unzip it; you get a `mingw64\` folder containing `bin\`, `lib\`, `include\`,
    and `x86_64-w64-mingw32\`.
-3. Make `mingw64\` *be* the package: drop `cmmc.exe` and `examples\` into the
+3. Make `mingw64\` *be* the package: drop `cmm.exe` and `examples\` into the
    top of it and rename the folder to `cmm-win64\`. Now:
-   - `cmm-win64\cmmc.exe`  ← the compiler
+   - `cmm-win64\cmm.exe`  ← the compiler
    - `cmm-win64\bin\gcc.exe` ← found automatically (step 3 above)
    - `gcc.exe` locates its own sysroot under `cmm-win64\` (so the whole GCC
      tree must stay intact — don't copy only `bin\`).
 
-That's it. `cmm-win64\cmmc.exe build examples\Demo.cmm -o demo.exe` works on a
+That's it. `cmm-win64\cmm.exe build examples\Demo.cmm -o demo.exe` works on a
 machine with no compiler installed.
 
 ### TLS on Windows (optional)
@@ -59,7 +59,7 @@ machine with no compiler installed.
   (or into `cmm-win64\bin\`, which is on the program's search path if the
   package dir is on PATH).
 
-`cmmc` auto-detects this (it probe-compiles against `include\`/`lib\`); force it
+`cmm` auto-detects this (it probe-compiles against `include\`/`lib\`); force it
 with `--tls`, or skip with `--no-tls`.
 
 ---
@@ -74,14 +74,14 @@ straightforward C99 that C-- emits and links Winsock/threads fine.
    - `cmm-win64\bin\tcc.exe`
    - `cmm-win64\bin\include\`  (tcc's headers — tcc finds these relative to itself)
    - `cmm-win64\bin\lib\`      (`libtcc1.a`, the Win32 `*.def` import libs)
-3. `cmmc` finds `bin\tcc.exe` and uses the `tcc` codepath automatically.
+3. `cmm` finds `bin\tcc.exe` and uses the `tcc` codepath automatically.
 
 TinyCC + OpenSSL is fiddly (you need OpenSSL import defs tcc understands); if you
 want TLS, prefer Option A. Build with `--no-tls` when using tcc without OpenSSL.
 
 ---
 
-## Building `cmmc.exe`
+## Building `cmm.exe`
 
 On Windows: open the WinLibs/MinGW shell (or any prompt with `gcc` on PATH) and
 
@@ -89,17 +89,17 @@ On Windows: open the WinLibs/MinGW shell (or any prompt with `gcc` on PATH) and
 cd bootstrap
 gcc -std=c99 -O2 embed.c -o embed_tool.exe
 embed_tool.exe ..\runtime\cmm_runtime.h ..\runtime\cmm_runtime.c embedded_runtime.h
-gcc -std=c99 -O2 cmmc.c -o cmmc.exe
+gcc -std=c99 -O2 cmm.c -o cmm.exe
 ```
 
-(`build_cmmc.bat` does exactly this.) Cross-building from Linux/macOS with
+(`build_cmm.bat` does exactly this.) Cross-building from Linux/macOS with
 MinGW works too:
 
 ```
-x86_64-w64-mingw32-gcc -std=c99 -O2 cmmc.c -o cmmc.exe
+x86_64-w64-mingw32-gcc -std=c99 -O2 cmm.c -o cmm.exe
 ```
 
-`cmmc.c` already `#include`s `embedded_runtime.h`, so regenerate that first if
+`cmm.c` already `#include`s `embedded_runtime.h`, so regenerate that first if
 the runtime changed.
 
 ---
@@ -107,8 +107,8 @@ the runtime changed.
 ## Quick self-test on the target machine
 
 ```
-cmm-win64\cmmc.exe version
-cmm-win64\cmmc.exe build examples\Demo.cmm -o demo.exe -v   ::  prints the bundled cc
+cmm-win64\cmm.exe version
+cmm-win64\cmm.exe build examples\Demo.cmm -o demo.exe -v   ::  prints the bundled cc
 demo.exe
 ```
 

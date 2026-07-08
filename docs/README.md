@@ -33,8 +33,8 @@ not reclaimed until that frame returns.)
 ## Tooling
 
 - **VS Code extension** — [`editor/vscode/`](../editor/vscode/): highlighting +
-  live diagnostics via `cmmc check`.
-- **`cmmc check <file>`** — parse + type-check only; reports **all** errors in one pass.
+  live diagnostics via `cmm check`.
+- **`cmm check <file>`** — parse + type-check only; reports **all** errors in one pass.
 - **`--debug` / `-g`** — `-O0 -g`, `#line` source maps, `CMM_DEBUG` runtime.
 
 ## Built-in libraries

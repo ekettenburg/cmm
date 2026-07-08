@@ -1,0 +1,51 @@
+class Totp;
+
+// Zero-write TOTP (RFC 6238-style, 60-second step). Derive a per-user seed from
+// an identifier and a site-wide secret, then generate and verify short codes
+// without storing any per-user state. Mirrors the PHP reference
+// (totp_seed / totp_minute / verify_otp). Uses SHA-1 HOTP with 60s periods.
+
+// Per-user seed = HMAC-SHA256(secret, lowercase(trim(text))) -> 32 raw bytes.
+// `text` is the user identity (e.g. an email); `secret` is your site-wide key.
+fn seed(text: String, secret: String) -> String {
+    t = text.trim();
+    low = t.lower();
+    s = Crypto.hmacSha256(secret, low);
+    return s;
+}
+
+// Code for the current 60-second window, shifted by `offsetSteps` minutes.
+fn minute(seed: String, offsetSteps: Int, digits: Int) -> String {
+    now = Date.now();
+    counter = now / 60;
+    counter = counter + offsetSteps;
+    out = Crypto.hotp(seed, counter, digits);
+    return out;
+}
+
+// Convenience: the current 6-digit code (what you'd send to the user).
+fn code(seed: String) -> String {
+    c = minute(seed, 0, 6);
+    return c;
+}
+
+// Verify a submitted code against the current minute and the previous
+// (periods - 1) minutes, constant-time. Digit count is taken from the code.
+// e.g. periods = 11 tolerates codes up to ~10 minutes old.
+fn verify(seed: String, userCode: String, periods: Int) -> Bool {
+    digits = userCode.length();
+    i = 0;
+    ok = false;
+    while (i < periods) {
+        off = 0 - i;
+        expected = minute(seed, off, digits);
+        same = Crypto.timingSafeEqual(expected, userCode);
+        if (same) {
+            ok = true;
+            i = periods;
+        } else {
+            i = i + 1;
+        }
+    }
+    return ok;
+}

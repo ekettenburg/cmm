@@ -87,7 +87,7 @@ fatal error during one-time setup before the loop.
 You can also build and upload the package from a cmm program using the
 [`Zip`](lib-zip.md) library and these control-plane calls. They sign requests
 with AWS SigV4 over HTTPS, so the deploying program must be a **TLS build**
-(`cmmc build deploy.cmm --tls`). Region and credentials are read from the
+(`cmm build deploy.cmm --tls`). Region and credentials are read from the
 standard environment variables: `AWS_REGION` (or `AWS_DEFAULT_REGION`),
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` (optional).
 
@@ -117,7 +117,7 @@ create the function once with the AWS CLI and then push code with
 ## Deploying
 
 ```
-cmmc build LambdaHandler.cmm -o bootstrap     # the executable MUST be named "bootstrap"
+cmm build LambdaHandler.cmm -o bootstrap     # the executable MUST be named "bootstrap"
 chmod +x bootstrap
 zip function.zip bootstrap
 # upload function.zip to a function using the provided.al2023 (or provided.al2) runtime

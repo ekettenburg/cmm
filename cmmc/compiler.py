@@ -127,30 +127,27 @@ def find_zig():
 
 
 def find_c_compiler():
-    """Return (cc_list, kind). One toolchain everywhere: prefer zig when present."""
+    """Return (cc_list, kind). One toolchain: zig (CMMC_CC overrides, gcc-like)."""
     ov = os.environ.get("CMMC_CC")
     if ov:
-        toks = ov.split()
-        base = os.path.basename(toks[0])
-        return toks, ("msvc" if base in ("cl", "cl.exe") else "gcc-like")
+        return ov.split(), "gcc-like"
     z = find_zig()
     if z:
         return z + ["cc"], "gcc-like"
-    for cc in ("clang", "gcc", "cc"):
-        if _which(cc):
-            return [cc], "gcc-like"
-    if _which("cl"):
-        return ["cl"], "msvc"
     return None, None
 
 
-# Cross-compile presets: name -> (zig target triple, static?)
+# Cross-compile presets: name -> (zig target triple, static?, target_os)
 _TARGETS = {
-    "al2023":        ("x86_64-linux-gnu.2.34",  False),
-    "lambda":        ("x86_64-linux-gnu.2.34",  False),
-    "amazonlinux":   ("x86_64-linux-gnu.2.34",  False),
-    "al2023-arm64":  ("aarch64-linux-gnu.2.34", False),
-    "al2023-static": ("x86_64-linux-musl",      True),
+    "al2023":        ("x86_64-linux-gnu.2.34",  False, "linux"),
+    "lambda":        ("x86_64-linux-gnu.2.34",  False, "linux"),
+    "amazonlinux":   ("x86_64-linux-gnu.2.34",  False, "linux"),
+    "al2023-arm64":  ("aarch64-linux-gnu.2.34", False, "linux"),
+    "al2023-static": ("x86_64-linux-musl",      True,  "linux"),
+    "windows-x64":   ("x86_64-windows-gnu",     False, "windows"),
+    "windows":       ("x86_64-windows-gnu",     False, "windows"),
+    "win64":         ("x86_64-windows-gnu",     False, "windows"),
+    "windows-arm64": ("aarch64-windows-gnu",    False, "windows"),
 }
 
 def setup_target(target):
@@ -158,17 +155,17 @@ def setup_target(target):
     if target not in _TARGETS:
         raise CompileError("unknown --target '%s' (use: %s)"
                            % (target, ", ".join(_TARGETS)))
-    triple, static = _TARGETS[target]
+    triple, static, tos = _TARGETS[target]
     ov = os.environ.get("CMMC_CC")
     if ov:
-        return ov.split(), "gcc-like", "linux", static
+        return ov.split(), "gcc-like", tos, static
     z = find_zig()
     if not z:
         raise CompileError(
-            "building for Amazon Linux needs zig (one toolchain for all hosts).\n"
+            "cross-compiling needs zig (one toolchain for all hosts).\n"
             "  install once:  pip install ziglang     (Windows and Linux)\n"
             "  or put zig from ziglang.org on PATH, or set CMMC_ZIG=<path>.")
-    return z + ["cc", "-target", triple], "gcc-like", "linux", static
+    return z + ["cc", "-target", triple], "gcc-like", tos, static
 
 
 THIRD_PARTY = os.path.normpath(os.path.join(RUNTIME_DIR, "..", "third_party"))
@@ -204,7 +201,7 @@ def ensure_tls_lib(cc, target_key, verbose=False):
     tdir = find_tls_dir()
     if not tdir:
         return None
-    obj = os.path.join(_cache_dir(target_key), "cmmtls_min.o")
+    obj = os.path.join(_cache_dir(target_key), "cmmtls_v2.o")
     if os.path.exists(obj):
         return obj
     inc = os.path.join(tdir, "mbedtls", "include")
@@ -229,6 +226,38 @@ def ensure_tls_lib(cc, target_key, verbose=False):
     return obj
 
 
+def _ensure_runtime_obj(cc, key, runtime_c, tls_defs, opt, debug, verbose):
+    """Cache the compiled runtime object per target+flags. The large runtime
+    otherwise recompiles on every build and dominates the time; caching it (keyed
+    by a hash of the runtime source + TLS config) makes rebuilds far faster."""
+    import hashlib
+    h = hashlib.sha1()
+    try:
+        with open(runtime_c, "rb") as f:
+            h.update(f.read())
+        if tls_defs:
+            tdir = find_tls_dir()
+            cfg = os.path.join(tdir, "cmm_mbedtls_config.h") if tdir else None
+            if cfg and os.path.exists(cfg):
+                with open(cfg, "rb") as f:
+                    h.update(f.read())
+    except OSError:
+        return None
+    tag = ("t1" if tls_defs else "t0") \
+        + ("v1" if "-DCMM_TLS_NO_VERIFY" in tls_defs else "v0") \
+        + ("d1" if debug else "d0")
+    obj = os.path.join(_cache_dir(key), f"rt_{h.hexdigest()[:8]}_{tag}.o")
+    if os.path.exists(obj):
+        return obj
+    cmd = [*cc, "-std=c99", *opt, f"-I{RUNTIME_DIR}", *tls_defs, "-c",
+           runtime_c, "-o", obj]
+    try:
+        r = subprocess.run(cmd, capture_output=not verbose)
+        return obj if (r.returncode == 0 and os.path.exists(obj)) else None
+    except Exception:
+        return None
+
+
 def compile_to_executable(c_path, out_path, verbose=False, tls="auto",
                           target=None, static=False, target_os=None, debug=False,
                           uses_http=True, no_verify=False):
@@ -238,14 +267,15 @@ def compile_to_executable(c_path, out_path, verbose=False, tls="auto",
         cc, kind = find_c_compiler()
     if cc is None:
         raise CompileError(
-            "no C compiler found. Easiest fix: pip install ziglang "
-            "(one toolchain for Windows and Linux). Or install clang/gcc/MSVC.")
+            "zig toolchain not found. cmm compiles through zig (one C toolchain "
+            "for every target). Install it: pip install ziglang (Windows, macOS, "
+            "Linux), put zig on PATH, or set CMMC_ZIG / CMMC_CC.")
     runtime_c = os.path.join(RUNTIME_DIR, "cmm_runtime.c")
 
     tls_defs, tls_link = ([], [])
     # auto: only pay for TLS if the program actually calls Http.*
     want_tls = (tls == "on") or (tls == "auto" and uses_http)
-    if want_tls and kind == "gcc-like":
+    if want_tls:
         key = target if target else ("host-static" if static else "host")
         obj = ensure_tls_lib(cc, key, verbose=verbose)
         if obj:
@@ -268,30 +298,24 @@ def compile_to_executable(c_path, out_path, verbose=False, tls="auto",
     tgt_win = (target_os == "windows") if target_os else (sys.platform == "win32")
     opt = (["-O0", "-g", "-DCMM_DEBUG"] if debug
            else ["-O2", "-ffunction-sections", "-fdata-sections"])
-    if kind == "gcc-like":
-        cmd = [*cc, "-std=c99", *opt]
-        if static:
-            cmd.append("-static")
-        cmd += [f"-I{RUNTIME_DIR}", *tls_defs, c_path, runtime_c,
-                "-o", out_path, "-lm"]
-        if tgt_win:
-            cmd += ["-lws2_32", "-ladvapi32"]
-        else:
-            cmd.append("-lpthread")
-        cmd.extend(tls_link)
-        if tgt_win and tls_link:
-            cmd.append("-lbcrypt")
-        if not debug:
-            # drop unreferenced runtime/TLS code and strip symbols
-            cmd += ["-Wl,--gc-sections", "-s"]
-    else:  # msvc
-        mopt = (["/Od", "/Zi", "/DCMM_DEBUG"] if debug
-                else ["/O2", "/Gy", "/Gw"])
-        cmd = [*cc, "/nologo", *mopt, f"/I{RUNTIME_DIR}", *tls_defs,
-               c_path, runtime_c,
-               "ws2_32.lib", "advapi32.lib", *tls_link, f"/Fe:{out_path}"]
-        if not debug:
-            cmd += ["/link", "/OPT:REF", "/OPT:ICF"]
+    # cache the compiled runtime object (falls back to source if unavailable)
+    _rtkey = target if target else ("host-static" if static else "host")
+    _rt = _ensure_runtime_obj(cc, _rtkey, runtime_c, tls_defs, opt, debug, verbose)
+    rt_in = _rt if _rt else runtime_c
+    cmd = [*cc, "-std=c99", *opt]
+    if static:
+        cmd.append("-static")
+    cmd += [f"-I{RUNTIME_DIR}", *tls_defs, c_path, rt_in, "-o", out_path, "-lm"]
+    if tgt_win:
+        cmd += ["-lws2_32", "-ladvapi32"]
+    else:
+        cmd.append("-lpthread")
+    cmd.extend(tls_link)
+    if tgt_win and tls_link:
+        cmd.append("-lbcrypt")
+    if not debug:
+        # drop unreferenced runtime/TLS code and strip symbols
+        cmd += ["-Wl,--gc-sections", "-s"]
 
     if verbose or debug:
         print("  " + " ".join(cmd))
@@ -333,7 +357,7 @@ def build(entry_path, out_path=None, emit_c=False, keep_c=False, verbose=False,
     c_src = codegen.generate(program, entry, debug=debug)
     if debug:
         keep_c = True
-    uses_http = "cmm_http_" in c_src
+    uses_http = ("cmm_http_" in c_src) or ("cmm_mysql_connect_tls" in c_src)
 
     base = os.path.splitext(os.path.abspath(entry_path))[0]
     c_path = base + ".c"

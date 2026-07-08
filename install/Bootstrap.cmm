@@ -1,4 +1,4 @@
-class Install;
+class Bootstrap;
 use Out;
 
 // cmm self-installer, written in cmm.
@@ -8,7 +8,7 @@ use Out;
 //   2. detect this machine's platform with Sys.platform(),
 //   3. download the cmm source zip and the zig build for this platform,
 //   4. unzip them into ./cmm and ./zig with Zip.unzip(),
-//   5. build the cmm compiler (cmmc) for this platform using that zig.
+//   5. build the cmm compiler (cmm) for this platform using that zig.
 //
 // Expected manifest shape:
 //   {
@@ -100,7 +100,39 @@ fn findZig(dir: String) -> String {
     return found;
 }
 
-// Build the cmm compiler (cmmc) from source using the downloaded zig.
+// Locate the actual cmm source root inside an extracted dir. Handles
+// archives that unpack into a single top-level subdirectory (e.g. GitHub's
+// codeload zips: cmm-main/bootstrap, cmm-main/runtime) instead of shipping
+// bootstrap/ and runtime/ directly at the top.
+//
+// File.exists() opens the path with fopen(), which fails on directories (at
+// least on Windows) -- so this checks for a known file inside bootstrap/
+// (embed.c) rather than the bootstrap/ directory itself.
+fn findCmmRoot(dir: String) -> String {
+    marker = pathjoin(pathjoin(dir, "bootstrap"), "embed.c");
+    root = dir;
+    there = File.exists(marker);
+    if (not there) {
+        listCmd = "ls " + q(dir);
+        if (@os == "windows") {
+            listCmd = "cmd /c dir /b " + q(dir);
+        }
+        out = Sys.exec(listCmd);
+        trimmed = out.trim();
+        lines = trimmed.split("\n");
+        first = lines.get(0);
+        sub = first.trim();
+        cand = pathjoin(dir, sub);
+        candMarker = pathjoin(pathjoin(cand, "bootstrap"), "embed.c");
+        ok2 = File.exists(candMarker);
+        if (ok2) {
+            root = cand;
+        }
+    }
+    return root;
+}
+
+// Build the cmm compiler (cmm) from source using the downloaded zig.
 fn buildCmm(cmmDir: String, zig: String) -> Bool {
     boot = pathjoin(cmmDir, "bootstrap");
     rt = pathjoin(cmmDir, "runtime");
@@ -108,13 +140,13 @@ fn buildCmm(cmmDir: String, zig: String) -> Bool {
     embedName = "embed_tool" + @exe;
     embedBin = pathjoin(boot, embedName);
     embeddedH = pathjoin(boot, "embedded_runtime.h");
-    cmmcSrc = pathjoin(boot, "cmmc.c");
-    cmmcName = "cmmc" + @exe;
-    cmmcBin = pathjoin(boot, cmmcName);
+    cmmSrc = pathjoin(boot, "cmm.c");
+    cmmName = "cmm" + @exe;
+    cmmBin = pathjoin(boot, cmmName);
     rtH = pathjoin(rt, "cmm_runtime.h");
     rtC = pathjoin(rt, "cmm_runtime.c");
 
-    // The runtime is embedded into cmmc as a generated header. If the source
+    // The runtime is embedded into cmm as a generated header. If the source
     // zip didn't ship it, regenerate it: build the embed tool and run it.
     haveH = File.exists(embeddedH);
     if (not haveH) {
@@ -125,18 +157,85 @@ fn buildCmm(cmmDir: String, zig: String) -> Bool {
     }
 
     // Compile the compiler itself with the downloaded zig backend.
-    c3 = zig + (" cc -std=c99 -O2 " + (q(cmmcSrc) + (" -o " + q(cmmcBin))));
+    c3 = zig + (" cc -std=c99 -O2 " + (q(cmmSrc) + (" -o " + q(cmmBin))));
     Out.print("  ");
     Out.line(c3);
     Sys.shell(c3);
 
-    ok = File.exists(cmmcBin);
+    ok = File.exists(cmmBin);
     return ok;
+}
+
+
+// Write a launcher named `name` in `dir` that execs the real cmm at cmmAbs.
+// A wrapper (not a symlink) is used so cmm still resolves its own tree
+// (stdlib/, third_party/) correctly on Linux, macOS, and Windows.
+fn writeLauncher(dir: String, name: String, cmmAbs: String) {
+    if (@os == "windows") {
+        p = pathjoin(dir, name + ".cmd");
+        body = "@echo off\r\n" + (q(cmmAbs) + " %*\r\n");
+        File.write(p, body);
+    } else {
+        p = pathjoin(dir, name);
+        body = "#!/bin/sh\nexec " + (q(cmmAbs) + " \"$@\"\n");
+        File.write(p, body);
+        Sys.shell("chmod +x " + q(p));
+    }
+}
+
+// Put `cmm` on PATH so it "just works" from any directory.
+fn addToPath(cmmAbs: String, bootDir: String) {
+    if (@os == "windows") {
+        writeLauncher(bootDir, "cmm", cmmAbs);
+        ps = "powershell -NoProfile -Command \"[Environment]::SetEnvironmentVariable('PATH',[Environment]::GetEnvironmentVariable('PATH','User')+';" + bootDir;
+        ps = ps + "','User')\"";
+        Sys.shell(ps);
+        Out.print("added to your user PATH: ");
+        Out.line(bootDir);
+        Out.line("open a new terminal, then: cmm build app.cmm");
+    } else {
+        home = Sys.env("HOME");
+        binDir = home + "/.local/bin";
+        useUsrLocal = false;
+        chk = Sys.exec("sh -c '[ -w /usr/local/bin ] && echo yes || true'");
+        yes = chk.trim();
+        if (yes == "yes") {
+            binDir = "/usr/local/bin";
+            useUsrLocal = true;
+        }
+        Sys.shell("mkdir -p " + q(binDir));
+        writeLauncher(binDir, "cmm", cmmAbs);
+        path = Sys.env("PATH");
+        onPath = path.contains(binDir);
+        needRc = true;
+        if (onPath) { needRc = false; }
+        if (useUsrLocal) { needRc = false; }
+        if (needRc) {
+            s = "touch \"$HOME/.profile\"\n";
+            s = s + "case \"$SHELL\" in *zsh*) R=\"$HOME/.zshrc\";; *) R=\"$HOME/.bashrc\";; esac\n";
+            s = s + "touch \"$R\"\n";
+            s = s + "for f in \"$R\" \"$HOME/.profile\"; do\n";
+            s = s + "grep -q 'cmm installer' \"$f\" 2>/dev/null || printf '\\n# added by cmm installer\\nexport PATH=\"";
+            s = s + binDir;
+            s = s + ":$PATH\"\\n' >> \"$f\"\n";
+            s = s + "done\n";
+            File.write("cmm_setpath.sh", s);
+            Sys.shell("sh cmm_setpath.sh");
+            Sys.shell("rm -f cmm_setpath.sh");
+            Out.print("added to PATH via your shell profile: ");
+            Out.line(binDir);
+            Out.line("restart your shell (or: source ~/.profile), then: cmm build app.cmm");
+        } else {
+            Out.print("installed on PATH at ");
+            Out.line(binDir);
+            Out.line("run: cmm build app.cmm");
+        }
+    }
 }
 
 fn main() {
     args = Sys.args();
-    manifestUrl = "https://raw.githubusercontent.com/example/cmm/main/install/manifest.json";
+    manifestUrl = "https://raw.githubusercontent.com/ekettenburg/cmm/refs/heads/main/install/manifest.json";
     n = args.length();
     if (n > 1) {
         manifestUrl = args.get(1);
@@ -210,12 +309,21 @@ fn main() {
     Out.line(zig);
 
     Out.line("building cmm for this platform...");
-    built = buildCmm("cmm", zig);
+    cmmSrcDir = findCmmRoot("cmm");
+    built = buildCmm(cmmSrcDir, zig);
     if (not built) {
         Out.line("error: build failed");
         Sys.exit(1);
     }
+    cwd = Sys.cwd();
+    cmmRoot = pathjoin(cwd, cmmSrcDir);
+    bootDir = pathjoin(cmmRoot, "bootstrap");
+    cmmAbs = pathjoin(bootDir, "cmm" + @exe);
     Out.print("done — cmm built at ");
-    final = pathjoin("cmm", pathjoin("bootstrap", "cmmc" + @exe));
-    Out.line(final);
+    Out.line(cmmAbs);
+
+    // Drop a launcher in the current directory so ./cmm works immediately,
+    // then add cmm to PATH for this system so `cmm` works from anywhere.
+    writeLauncher(cwd, "cmm", cmmAbs);
+    addToPath(cmmAbs, bootDir);
 }

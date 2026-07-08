@@ -52,3 +52,38 @@ b = wait j2;
 and tested. `caching_sha2_password` (MySQL 8's default; needs TLS-cleartext or
 RSA) and prepared statements / the binary protocol are not yet supported. Open a
 connection per concurrent job.
+
+## TLS / encrypted connections (TiDB Cloud, PlanetScale, RDS)
+
+Use `Mysql.connectTls(host, port, user, pass, db, ca)` for servers that require
+TLS. It performs the MySQL protocol's STARTTLS upgrade — read the server
+handshake in the clear, send an `SSLRequest`, complete the TLS handshake, then
+send credentials over the encrypted channel — and verifies the server
+certificate before authenticating.
+
+The `ca` argument selects the trust anchor:
+
+- **A PEM string** — e.g. `File.read("ca.pem")`; the server is verified against
+  that CA. Use this with a CA file downloaded from your provider.
+- **A file path** to a `.pem` — read for you if the string isn't already PEM.
+- **`""`** — verify against cmm's built-in Mozilla root bundle. This works when
+  the server presents a publicly-trusted certificate, which **TiDB Cloud** does,
+  so `""` is usually enough there.
+
+```
+// TiDB Cloud, verifying against the built-in public roots:
+conn = Mysql.connectTls("gateway01.<region>.prod.aws.tidbcloud.com", 4000,
+                        "<prefix>.root", "<password>", "test", "");
+
+// Or pin a specific CA you downloaded:
+ca   = File.read("ca.pem");
+conn = Mysql.connectTls(host, 4000, user, pass, db, ca);
+```
+
+Hostname is checked against the certificate's SAN, so `host` must match the
+name on the cert. Setting `CMMC_TLS_INSECURE=1` in the environment skips
+verification (testing only). Everything after connect — `query`, `exec`,
+`insertId`, `affected`, `close`, and `run`/`wait` async — is identical to a
+plaintext connection; the encryption is transparent. Verified end-to-end against
+a `REQUIRE SSL` MariaDB with certificate verification. See
+[examples/MysqlTlsDemo.cmm](../examples/MysqlTlsDemo.cmm).

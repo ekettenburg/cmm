@@ -32,7 +32,7 @@
 /* lifetime data (the entry object, @class-variable state, thread results).  */
 /* ======================================================================== */
 
-#if defined(_WIN32)
+#if defined(_MSC_VER)
   #define CMM_TLS __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
   #define CMM_TLS __thread
@@ -219,9 +219,8 @@ void cmm_init(void) {
         WSAStartup(MAKEWORD(2, 2), &wsa);
     }
 #endif
-#ifdef CMM_HAVE_TLS
-    cmm_tls_init();
-#endif
+    /* TLS is initialized lazily on the first HTTPS/TLS call, so a program that
+       never makes one pays nothing and startup can't fault in mbedTLS. */
 }
 
 /* A worker thread starts with no region; root it at the program region so
@@ -2851,6 +2850,44 @@ CmmValue cmm_crypto_hmac_sha256_hex(CmmValue key, CmmValue data){
     cx_hmac_sha256((const unsigned char*)k->data,k->len,(const unsigned char*)d->data,d->len,h);
     cx_hex(h,32,out); return cmm_str(out);
 }
+/* HMAC-SHA1 (raw 20 bytes) — needed for TOTP/HOTP */
+static void cx_hmac_sha1(const unsigned char *key,size_t kl,const unsigned char *d,size_t n,unsigned char out[20]){
+    unsigned char k[64], ki[64], ko[64], kh[20];
+    if(kl>64){ cx_sha1(key,kl,kh); memcpy(k,kh,20); memset(k+20,0,44); }
+    else { memcpy(k,key,kl); memset(k+kl,0,64-kl); }
+    for(int i=0;i<64;i++){ ki[i]=k[i]^0x36; ko[i]=k[i]^0x5c; }
+    unsigned char *inner=(unsigned char*)malloc(64+n); memcpy(inner,ki,64); if(n) memcpy(inner+64,d,n);
+    unsigned char ih[20]; cx_sha1(inner,64+n,ih); free(inner);
+    unsigned char outer[84]; memcpy(outer,ko,64); memcpy(outer+64,ih,20);
+    cx_sha1(outer,84,out);
+}
+CmmValue cmm_crypto_hmac_sha1(CmmValue key, CmmValue data){
+    CmmString *k=cmm_to_string(key), *d=cmm_to_string(data); unsigned char h[20];
+    cx_hmac_sha1((const unsigned char*)k->data,k->len,(const unsigned char*)d->data,d->len,h);
+    return cmm_str_n((const char*)h,20);
+}
+/* RFC 4226 HOTP: dynamic truncation of HMAC-SHA1(seed, 8-byte big-endian counter). */
+CmmValue cmm_crypto_hotp(CmmValue seed, CmmValue counter, CmmValue digits){
+    CmmString *s=cmm_to_string(seed);
+    uint64_t c=(uint64_t)as_int(counter);
+    int dg=(int)as_int(digits); if(dg<1) dg=6; if(dg>9) dg=9;
+    unsigned char cb[8]; for(int i=7;i>=0;i--){ cb[i]=(unsigned char)(c & 0xffu); c>>=8; }
+    unsigned char h[20];
+    cx_hmac_sha1((const unsigned char*)s->data,s->len,cb,8,h);
+    int off=h[19]&0x0f;
+    uint32_t bin=(((uint32_t)(h[off]&0x7f))<<24)|(((uint32_t)h[off+1])<<16)
+                |(((uint32_t)h[off+2])<<8)|((uint32_t)h[off+3]);
+    uint32_t mod=1; for(int i=0;i<dg;i++) mod*=10u;
+    char buf[16]; snprintf(buf,sizeof buf,"%0*u",dg,(unsigned)(bin%mod));
+    return cmm_str(buf);
+}
+/* constant-time equality, like PHP hash_equals */
+CmmValue cmm_crypto_timing_safe_equal(CmmValue a, CmmValue b){
+    CmmString *sa=cmm_to_string(a), *sb=cmm_to_string(b);
+    if(sa->len!=sb->len) return cmm_bool(0);
+    unsigned char diff=0; for(size_t i=0;i<sa->len;i++) diff|=(unsigned char)(sa->data[i]^sb->data[i]);
+    return cmm_bool(diff==0);
+}
 CmmValue cmm_crypto_hex(CmmValue data){
     CmmString *s=cmm_to_string(data); char *out=(char*)malloc(s->len*2+1);
     cx_hex((const unsigned char*)s->data,s->len,out);
@@ -2915,6 +2952,275 @@ CmmValue cmm_http_send(CmmValue method, CmmValue url, CmmValue headers, CmmValue
 }
 
 
+/* ===== Request layer: normalize a Lambda Function URL event, plus a
+   local dev server that emits the SAME event shape so app paths are identical.
+   Injected before the MySQL section; relies on json/base64/dict/list helpers. */
+
+static const char *rq_memfind(const char *h, size_t hn, const char *n, size_t nn){
+    if(nn==0||nn>hn) return NULL;
+    for(size_t i=0;i+nn<=hn;i++) if(memcmp(h+i,n,nn)==0) return h+i;
+    return NULL;
+}
+static int rq_hex(int c){ if(c>='0'&&c<='9')return c-'0'; if(c>='a'&&c<='f')return c-'a'+10; if(c>='A'&&c<='F')return c-'A'+10; return -1; }
+static void rq_pctdecode(const char *s, size_t n, SB *out){
+    for(size_t i=0;i<n;i++){
+        char c=s[i];
+        if(c=='+'){ char sp=' '; sb_putn(out,&sp,1); }
+        else if(c=='%' && i+2<n && rq_hex((unsigned char)s[i+1])>=0 && rq_hex((unsigned char)s[i+2])>=0){
+            char b=(char)((rq_hex((unsigned char)s[i+1])<<4)|rq_hex((unsigned char)s[i+2])); sb_putn(out,&b,1); i+=2;
+        } else sb_putn(out,&c,1);
+    }
+}
+/* application/x-www-form-urlencoded (or a raw query string) -> CV_DICT */
+static CmmValue rq_parse_query(const char *s, size_t n){
+    CmmValue d=cmm_new_dict();
+    size_t i=0;
+    while(i<n){
+        size_t st=i; while(i<n && s[i]!='&') i++;
+        const char *pair=s+st; size_t pl=i-st;
+        size_t eq=0; while(eq<pl && pair[eq]!='=') eq++;
+        SB kb; sb_init(&kb); rq_pctdecode(pair,eq,&kb);
+        SB vb; sb_init(&vb); if(eq<pl) rq_pctdecode(pair+eq+1,pl-eq-1,&vb);
+        CmmValue key=sb_to_str(&kb), val=sb_to_str(&vb);
+        if(key.s && key.s->len) cmm_data_set(d,key,val);
+        if(i<n) i++;
+    }
+    return d;
+}
+/* pull a quoted or bare attribute value out of a MIME header line */
+static void rq_attr(const char *hdr, size_t hn, const char *name, SB *out){
+    size_t nn=strlen(name);
+    const char *at=rq_memfind(hdr,hn,name,nn);
+    if(!at) return;
+    const char *p=at+nn; const char *end=hdr+hn;
+    while(p<end && (*p==' '||*p=='=')) p++;
+    if(p<end && *p=='"'){ p++; while(p<end && *p!='"'){ sb_putn(out,p,1); p++; } }
+    else { while(p<end && *p!=';' && *p!='\r' && *p!='\n' && *p!=' '){ sb_putn(out,p,1); p++; } }
+}
+/* multipart/form-data -> fill `form` (CV_DICT) and `files` (CV_LIST of dicts) */
+static void rq_parse_multipart(const char *body, size_t bn, const char *boundary,
+                               CmmValue form, CmmValue files){
+    char delim[300]; int dl=snprintf(delim,sizeof delim,"--%s",boundary);
+    const char *p=rq_memfind(body,bn,delim,(size_t)dl);
+    if(!p) return;
+    const char *end=body+bn;
+    p+=dl;
+    while(p<end){
+        if(p+2<=end && p[0]=='-' && p[1]=='-') break;         /* closing --boundary-- */
+        if(p+2<=end && p[0]=='\r' && p[1]=='\n') p+=2;         /* CRLF after boundary   */
+        const char *hend=rq_memfind(p,(size_t)(end-p),"\r\n\r\n",4);
+        if(!hend) break;
+        size_t hlen=(size_t)(hend-p);
+        SB nameB; sb_init(&nameB); rq_attr(p,hlen,"name",&nameB);
+        SB fileB; sb_init(&fileB); rq_attr(p,hlen,"filename",&fileB);
+        SB ctB;   sb_init(&ctB);   rq_attr(p,hlen,"Content-Type:",&ctB);
+        const char *cstart=hend+4;
+        const char *nextb=rq_memfind(cstart,(size_t)(end-cstart),delim,(size_t)dl);
+        const char *cend = nextb ? nextb : end;
+        size_t clen=(size_t)(cend-cstart);
+        if(clen>=2 && cend[-2]=='\r' && cend[-1]=='\n') clen-=2;  /* strip trailing CRLF */
+        CmmValue nameV=sb_to_str(&nameB);
+        CmmValue fileV=sb_to_str(&fileB);
+        CmmValue ctV=sb_to_str(&ctB);
+        if(fileV.s && fileV.s->len){
+            CmmValue f=cmm_new_dict();
+            cmm_data_set(f,cmm_str("name"),nameV);
+            cmm_data_set(f,cmm_str("filename"),fileV);
+            cmm_data_set(f,cmm_str("contentType"),ctV);
+            cmm_data_set(f,cmm_str("size"),cmm_int((int64_t)clen));
+            cmm_data_set(f,cmm_str("data"),cmm_str_n(cstart,clen));
+            list_push(files.list,f);
+        } else if(nameV.s && nameV.s->len){
+            cmm_data_set(form,nameV,cmm_str_n(cstart,clen));
+        }
+        if(!nextb) break;
+        p=nextb+dl;
+    }
+}
+
+static CmmValue rq_dget(CmmValue d, const char *k){
+    if(d.tag!=CV_DICT) return cmm_empty();
+    return cmm_data_get(d,cmm_str(k));
+}
+static const char *rq_dgets(CmmValue d, const char *k, const char *def){
+    CmmValue v=rq_dget(d,k);
+    return (v.tag==CV_STRING && v.s) ? v.s->data : def;
+}
+/* case-insensitive header lookup on a CV_DICT of headers */
+static CmmValue rq_header_ci(CmmValue headers, const char *name){
+    if(headers.tag!=CV_DICT) return cmm_empty();
+    CmmDict *d=headers.dict; size_t nn=strlen(name);
+    for(size_t i=0;i<d->len;i++){
+        CmmString *k=d->entries[i].key;
+        if(k && k->len==nn){
+            size_t j=0; for(;j<nn;j++){ int a=k->data[j],b=name[j]; if(a>='A'&&a<='Z')a+=32; if(b>='A'&&b<='Z')b+=32; if(a!=b)break; }
+            if(j==nn) return d->entries[i].val;
+        }
+    }
+    return cmm_empty();
+}
+
+/* Normalize a Lambda Function URL (v2.0) event JSON into a std request. */
+CmmValue cmm_req_parse(CmmValue evstr){
+    CmmValue ev=cmm_json_decode(evstr);
+    CmmValue rc=rq_dget(ev,"requestContext");
+    CmmValue http=rq_dget(rc,"http");
+    const char *method=rq_dgets(http,"method", rq_dgets(ev,"httpMethod","GET"));
+    const char *path=rq_dgets(ev,"rawPath", rq_dgets(ev,"path","/"));
+    const char *rawq=rq_dgets(ev,"rawQueryString","");
+    CmmValue headers=rq_dget(ev,"headers"); if(headers.tag!=CV_DICT) headers=cmm_new_dict();
+
+    /* body (+ base64) */
+    CmmValue bodyV=rq_dget(ev,"body");
+    CmmString *bs = (bodyV.tag==CV_STRING)?bodyV.s:NULL;
+    CmmValue isb=rq_dget(ev,"isBase64Encoded");
+    if(bs && isb.tag==CV_BOOL && isb.b) bodyV=cmm_base64_decode(bodyV), bs=cmm_to_string(bodyV);
+    const char *body = bs?bs->data:""; size_t blen = bs?bs->len:0;
+
+    /* query */
+    CmmValue query=rq_parse_query(rawq,strlen(rawq));
+
+    /* cookies: from event "cookies" array (v2) and/or Cookie header */
+    CmmValue cookies=cmm_new_dict();
+    CmmValue cookarr=rq_dget(ev,"cookies");
+    if(cookarr.tag==CV_LIST){
+        for(size_t i=0;i<cookarr.list->len;i++){ CmmValue c=cookarr.list->items[i];
+            if(c.tag==CV_STRING){ const char *s=c.s->data; size_t n=c.s->len; size_t eq=0; while(eq<n&&s[eq]!='=')eq++;
+                if(eq<n) cmm_data_set(cookies,cmm_str_n(s,eq),cmm_str_n(s+eq+1,n-eq-1)); } }
+    }
+    CmmValue ch=rq_header_ci(headers,"cookie");
+    if(ch.tag==CV_STRING){ const char *s=ch.s->data; size_t n=ch.s->len, i=0;
+        while(i<n){ while(i<n&&(s[i]==' '||s[i]==';'))i++; size_t st=i; while(i<n&&s[i]!=';')i++;
+            size_t eq=st; while(eq<i&&s[eq]!='=')eq++; if(eq<i){ size_t ks=st,ke=eq,vs=eq+1,ve=i; while(ke>ks&&s[ke-1]==' ')ke--;
+                cmm_data_set(cookies,cmm_str_n(s+ks,ke-ks),cmm_str_n(s+vs,ve-vs)); } } }
+
+    /* content-type dispatch */
+    CmmValue ctV=rq_header_ci(headers,"content-type");
+    const char *ct = (ctV.tag==CV_STRING)?ctV.s->data:"";
+    CmmValue json=cmm_empty(), form=cmm_empty(), files=cmm_new_list();
+    if(rq_memfind(ct,strlen(ct),"application/json",16)){
+        if(blen) json=cmm_json_decode(cmm_str_n(body,blen));
+    } else if(rq_memfind(ct,strlen(ct),"x-www-form-urlencoded",21)){
+        form=rq_parse_query(body,blen);
+    } else if(rq_memfind(ct,strlen(ct),"multipart/form-data",19)){
+        form=cmm_new_dict();
+        SB bb; sb_init(&bb); rq_attr(ct,strlen(ct),"boundary",&bb); CmmValue bv=sb_to_str(&bb);
+        if(bv.s && bv.s->len) rq_parse_multipart(body,blen,bv.s->data,form,files);
+    }
+
+    CmmValue r=cmm_new_dict();
+    cmm_data_set(r,cmm_str("method"),cmm_str(method));
+    cmm_data_set(r,cmm_str("path"),cmm_str(path));
+    cmm_data_set(r,cmm_str("query"),query);
+    cmm_data_set(r,cmm_str("headers"),headers);
+    cmm_data_set(r,cmm_str("cookies"),cookies);
+    cmm_data_set(r,cmm_str("contentType"),cmm_str(ct));
+    cmm_data_set(r,cmm_str("body"),cmm_str_n(body,blen));
+    cmm_data_set(r,cmm_str("json"),json);
+    cmm_data_set(r,cmm_str("form"),form);
+    cmm_data_set(r,cmm_str("files"),files);
+    return r;
+}
+
+/* ---- local dev server: same event shape as Lambda, over real HTTP -------- */
+static sockfd_t g_serve_fd=SOCK_BAD;
+static CMM_TLS sockfd_t g_serve_client=SOCK_BAD;   /* per-worker-thread current connection */
+
+CmmValue cmm_serve_listen(CmmValue port){
+    int p=(int)as_int(port);
+    sockfd_t fd=socket(AF_INET,SOCK_STREAM,0);
+    if(fd==SOCK_BAD) return cmm_bool(0);
+    int yes=1; setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,(const char*)&yes,sizeof yes);
+    struct sockaddr_in a; memset(&a,0,sizeof a);
+    a.sin_family=AF_INET; a.sin_addr.s_addr=htonl(INADDR_LOOPBACK); a.sin_port=htons((unsigned short)p);
+    if(bind(fd,(struct sockaddr*)&a,sizeof a)!=0){ CLOSESOCK(fd); return cmm_bool(0); }
+    if(listen(fd,16)!=0){ CLOSESOCK(fd); return cmm_bool(0); }
+    g_serve_fd=fd; return cmm_bool(1);
+}
+
+CmmValue cmm_serve_next(void){
+    if(g_serve_fd==SOCK_BAD) return cmm_str("");
+    sockfd_t c=accept(g_serve_fd,NULL,NULL);
+    if(c==SOCK_BAD) return cmm_str("");
+    g_serve_client=c;
+    SB in; sb_init(&in); char buf[4096]; size_t hend=0; long clen=-1;
+    for(;;){
+        if(!hend && in.len>=4){
+            for(size_t i=3;i<in.len;i++) if(in.p[i-3]=='\r'&&in.p[i-2]=='\n'&&in.p[i-1]=='\r'&&in.p[i]=='\n'){ hend=i+1; break; }
+            if(hend){ const char *cl=rq_memfind(in.p,hend,"ontent-Length:",14); if(!cl) cl=rq_memfind(in.p,hend,"ontent-length:",14);
+                if(cl){ cl+=14; while(*cl==' ')cl++; clen=strtol(cl,NULL,10); } else clen=0; }
+        }
+        if(hend){ size_t need=hend+(clen>0?(size_t)clen:0); if(in.len>=need) break; }
+        int r=recv(c,buf,sizeof buf,0); if(r<=0) break; sb_putn(&in,buf,r);
+    }
+    /* request line: METHOD SP target SP HTTP/1.1 */
+    const char *s=in.p, *lend=rq_memfind(in.p,in.len,"\r\n",2); if(!lend) lend=in.p+in.len;
+    const char *m0=s, *m1=s; while(m1<lend && *m1!=' ') m1++;
+    const char *t0=(m1<lend)?m1+1:m1, *t1=t0; while(t1<lend && *t1!=' ') t1++;
+    char method[16]={0}; size_t ml=(size_t)(m1-m0); if(ml>15)ml=15; memcpy(method,m0,ml);
+    const char *qm=t0; while(qm<t1 && *qm!='?') qm++;
+    SB pathB; sb_init(&pathB); sb_putn(&pathB,t0,(size_t)(qm-t0));
+    SB qB; sb_init(&qB); if(qm<t1) sb_putn(&qB,qm+1,(size_t)(t1-(qm+1)));
+    CmmValue pathV=sb_to_str(&pathB), qV=sb_to_str(&qB);
+
+    /* headers -> object; collect Cookie into a cookies array */
+    CmmValue hobj=cmm_new_dict(); CmmValue carr=cmm_new_list();
+    const char *hp=lend+2, *hstop=(hend?in.p+hend:in.p+in.len);
+    while(hp<hstop){
+        const char *he=rq_memfind(hp,(size_t)(hstop-hp),"\r\n",2); if(!he) he=hstop;
+        if(he==hp) break;
+        const char *colon=hp; while(colon<he && *colon!=':') colon++;
+        if(colon<he){ size_t kn=(size_t)(colon-hp); const char *v=colon+1; while(v<he&&*v==' ')v++;
+            char lk[128]; size_t lkn=kn<127?kn:127; for(size_t i=0;i<lkn;i++){ int ch2=hp[i]; lk[i]=(ch2>='A'&&ch2<='Z')?ch2+32:ch2; } lk[lkn]=0;
+            if(lkn==6 && memcmp(lk,"cookie",6)==0){ /* split into cookie list */
+                const char *cs=v; size_t cn=(size_t)(he-v), ci=0;
+                while(ci<cn){ while(ci<cn&&(cs[ci]==' '||cs[ci]==';'))ci++; size_t st=ci; while(ci<cn&&cs[ci]!=';')ci++;
+                    if(ci>st) list_push(carr.list,cmm_str_n(cs+st,ci-st)); }
+            } else cmm_data_set(hobj,cmm_str_n(lk,lkn),cmm_str_n(v,(size_t)(he-v)));
+        }
+        hp=he+2;
+    }
+    /* base64 the body so binary survives the JSON round-trip */
+    const char *body=(hend?in.p+hend:in.p+in.len); size_t blen=(clen>0)?(size_t)clen:0;
+    if(hend && in.len<hend+blen) blen=in.len-hend;
+    CmmValue b64=cmm_base64_encode(cmm_str_n(body,blen));
+
+    /* assemble a Lambda Function URL (v2.0) event JSON */
+    json_tbl(); SB j; sb_init(&j);
+    sb_put(&j,"{\"version\":\"2.0\",\"rawPath\":"); json_str(&j,pathV.s->data,pathV.s->len);
+    sb_put(&j,",\"rawQueryString\":"); json_str(&j,qV.s->data,qV.s->len);
+    sb_put(&j,",\"cookies\":["); for(size_t i=0;i<carr.list->len;i++){ if(i)sb_put(&j,","); CmmString *cs=carr.list->items[i].s; json_str(&j,cs->data,cs->len);} sb_put(&j,"]");
+    sb_put(&j,",\"headers\":{"); { CmmDict *hd=hobj.dict; for(size_t i=0;i<hd->len;i++){ if(i)sb_put(&j,","); json_str(&j,hd->entries[i].key->data,hd->entries[i].key->len); sb_put(&j,":"); CmmString *vv=cmm_to_string(hd->entries[i].val); json_str(&j,vv->data,vv->len);} } sb_put(&j,"}");
+    sb_put(&j,",\"requestContext\":{\"http\":{\"method\":"); json_str(&j,method,strlen(method));
+    sb_put(&j,",\"path\":"); json_str(&j,pathV.s->data,pathV.s->len);
+    sb_put(&j,",\"sourceIp\":\"127.0.0.1\"}}");
+    sb_put(&j,",\"body\":"); json_str(&j,b64.s->data,b64.s->len);
+    sb_put(&j,",\"isBase64Encoded\":true}");
+    return sb_to_str(&j);
+}
+
+CmmValue cmm_serve_respond(CmmValue resp){
+    if(g_serve_client==SOCK_BAD) return cmm_bool(0);
+    CmmValue r=cmm_json_decode(resp);
+    long code=200; CmmValue sc=rq_dget(r,"statusCode"); if(sc.tag==CV_INT) code=(long)sc.i; else if(sc.tag==CV_STRING) code=strtol(sc.s->data,NULL,10);
+    CmmValue bodyV=rq_dget(r,"body"); CmmString *bs=(bodyV.tag==CV_STRING)?bodyV.s:NULL;
+    CmmValue isb=rq_dget(r,"isBase64Encoded"); if(bs && isb.tag==CV_BOOL && isb.b){ bodyV=cmm_base64_decode(bodyV); bs=cmm_to_string(bodyV); }
+    const char *body=bs?bs->data:""; size_t blen=bs?bs->len:0;
+    SB o; sb_init(&o); char line[256];
+    snprintf(line,sizeof line,"HTTP/1.1 %ld OK\r\n",code); sb_put(&o,line);
+    CmmValue hs=rq_dget(r,"headers"); int hasCT=0;
+    if(hs.tag==CV_DICT){ CmmDict *hd=hs.dict; for(size_t i=0;i<hd->len;i++){ CmmString *k=hd->entries[i].key; CmmString *v=cmm_to_string(hd->entries[i].val);
+        if(k->len==12){ size_t j=0; for(;j<12;j++){int a=k->data[j];if(a>='A'&&a<='Z')a+=32; if(a!="content-type"[j])break;} if(j==12)hasCT=1; }
+        sb_putn(&o,k->data,k->len); sb_put(&o,": "); sb_putn(&o,v->data,v->len); sb_put(&o,"\r\n"); } }
+    if(!hasCT) sb_put(&o,"Content-Type: application/json\r\n");
+    snprintf(line,sizeof line,"Content-Length: %zu\r\nConnection: close\r\n\r\n",blen); sb_put(&o,line);
+    sb_putn(&o,body,blen);
+    size_t sent=0; while(sent<o.len){ int w=send(g_serve_client,o.p+sent,(int)(o.len-sent),0); if(w<=0)break; sent+=(size_t)w; }
+    free(o.p);
+    CLOSESOCK(g_serve_client); g_serve_client=SOCK_BAD;
+    return cmm_bool(1);
+}
+
 /* ===== MySQL client: native_password auth + text (COM_QUERY) protocol == */
 #define CMM_MYSQL_MAX 64
 typedef struct {
@@ -2925,8 +3231,17 @@ typedef struct {
     unsigned long long affected;
     unsigned long long insert_id;
     cmm_mutex_t lock;
+#ifdef CMM_HAVE_TLS
+    int tls_on;                    /* 1 once the link is upgraded to TLS   */
+    int have_conf;                 /* 1 if tconf/tca were inited (custom CA)*/
+    mbedtls_ssl_context ssl;
+    mbedtls_net_context net;
+    mbedtls_ssl_config  tconf;     /* per-conn config when a custom CA used */
+    mbedtls_x509_crt    tca;       /* caller-supplied CA chain              */
+#endif
 } MysqlConn;
 static MysqlConn g_mysql[CMM_MYSQL_MAX];
+static char g_mysql_last_err[512]="";
 static cmm_mutex_t g_mysql_tab;
 static int g_mysql_tab_ready = 0;
 static void my_tab_lock(void){ if(!g_mysql_tab_ready){ cmm_mutex_init(&g_mysql_tab); g_mysql_tab_ready=1; } cmm_mutex_lock(&g_mysql_tab); }
@@ -2937,21 +3252,39 @@ static int my_read_full(sockfd_t fd, unsigned char *buf, size_t n){
     while(got<n){ int r=recv(fd,(char*)buf+got,(int)(n-got),0); if(r<=0) return 0; got+=(size_t)r; }
     return 1;
 }
+/* All packet I/O goes through these so a TLS-upgraded link is transparent. */
+static int my_recv_all(MysqlConn *c, unsigned char *buf, size_t n){
+#ifdef CMM_HAVE_TLS
+    if(c->tls_on){ size_t g=0; while(g<n){ int r=mbedtls_ssl_read(&c->ssl,buf+g,n-g);
+        if(r<=0){ if(r==MBEDTLS_ERR_SSL_WANT_READ||r==MBEDTLS_ERR_SSL_WANT_WRITE) continue; return 0; }
+        g+=(size_t)r; } return 1; }
+#endif
+    return my_read_full(c->fd,buf,n);
+}
+static int my_send_all(MysqlConn *c, const unsigned char *buf, size_t n){
+#ifdef CMM_HAVE_TLS
+    if(c->tls_on){ size_t s=0; while(s<n){ int w=mbedtls_ssl_write(&c->ssl,buf+s,n-s);
+        if(w<=0){ if(w==MBEDTLS_ERR_SSL_WANT_READ||w==MBEDTLS_ERR_SSL_WANT_WRITE) continue; return 0; }
+        s+=(size_t)w; } return 1; }
+#endif
+    size_t sent=0;
+    while(sent<n){ int w=send(c->fd,(const char*)buf+sent,(int)(n-sent),0); if(w<=0) return 0; sent+=(size_t)w; }
+    return 1;
+}
 static int my_read_packet(MysqlConn *c, unsigned char **payload, size_t *plen){
     unsigned char hdr[4];
-    if(!my_read_full(c->fd,hdr,4)) return 0;
+    if(!my_recv_all(c,hdr,4)) return 0;
     size_t len = (size_t)hdr[0] | ((size_t)hdr[1]<<8) | ((size_t)hdr[2]<<16);
     c->seq = hdr[3];
     unsigned char *buf=(unsigned char*)malloc(len?len:1);
-    if(len && !my_read_full(c->fd,buf,len)){ free(buf); return 0; }
+    if(len && !my_recv_all(c,buf,len)){ free(buf); return 0; }
     *payload=buf; *plen=len; return 1;
 }
 static int my_write_packet(MysqlConn *c, const unsigned char *payload, size_t len){
     unsigned char hdr[4];
     hdr[0]=len&0xff; hdr[1]=(len>>8)&0xff; hdr[2]=(len>>16)&0xff; hdr[3]=c->seq;
-    if(send(c->fd,(const char*)hdr,4,0)!=4) return 0;
-    size_t sent=0;
-    while(sent<len){ int w=send(c->fd,(const char*)payload+sent,(int)(len-sent),0); if(w<=0) return 0; sent+=(size_t)w; }
+    if(!my_send_all(c,hdr,4)) return 0;
+    if(len && !my_send_all(c,payload,len)) return 0;
     return 1;
 }
 static unsigned long long my_lenenc(const unsigned char **p, const unsigned char *end){
@@ -2973,7 +3306,50 @@ static void my_scramble(const char *pass, const unsigned char *salt, unsigned ch
     for(int i=0;i<20;i++) out[i]=s1[i]^s3[i];
 }
 
-CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue pass, CmmValue db){
+#ifdef CMM_HAVE_TLS
+/* Upgrade an already-connected MySQL socket to TLS (MySQL STARTTLS flow).
+   ca_pem: PEM trust anchors to verify the server with; if empty, the built-in
+   Mozilla root bundle is used. host is used for SNI + hostname verification. */
+static int my_tls_wrap(MysqlConn *c, const char *host, const char *ca_pem){
+    cmm_tls_init();
+    mbedtls_ssl_init(&c->ssl);
+    c->net.fd = (int)c->fd;
+    mbedtls_ssl_config *conf = &g_tls_conf;
+    if(ca_pem && ca_pem[0]){
+        mbedtls_x509_crt_init(&c->tca);
+        mbedtls_ssl_config_init(&c->tconf);
+        c->have_conf = 1;
+        if(mbedtls_ssl_config_defaults(&c->tconf, MBEDTLS_SSL_IS_CLIENT,
+               MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)!=0){
+            snprintf(c->err,sizeof c->err,"TLS config failed"); goto tls_fail; }
+        if(mbedtls_x509_crt_parse(&c->tca,(const unsigned char*)ca_pem, strlen(ca_pem)+1)!=0){
+            snprintf(c->err,sizeof c->err,"could not parse CA certificate"); goto tls_fail; }
+        int insec = getenv("CMMC_TLS_INSECURE")!=NULL;
+        mbedtls_ssl_conf_authmode(&c->tconf, insec?MBEDTLS_SSL_VERIFY_NONE:MBEDTLS_SSL_VERIFY_REQUIRED);
+        mbedtls_ssl_conf_ca_chain(&c->tconf,&c->tca,NULL);
+        mbedtls_ssl_conf_rng(&c->tconf, mbedtls_ctr_drbg_random, &g_tls_drbg);
+        conf = &c->tconf;
+    }
+    if(mbedtls_ssl_setup(&c->ssl,conf)!=0){ snprintf(c->err,sizeof c->err,"TLS setup failed"); goto tls_fail; }
+    mbedtls_ssl_set_hostname(&c->ssl,host);
+    mbedtls_ssl_set_bio(&c->ssl,&c->net,mbedtls_net_send,mbedtls_net_recv,NULL);
+    { int hs; while((hs=mbedtls_ssl_handshake(&c->ssl))!=0)
+        if(hs!=MBEDTLS_ERR_SSL_WANT_READ && hs!=MBEDTLS_ERR_SSL_WANT_WRITE){
+            snprintf(c->err,sizeof c->err,"TLS handshake failed"); goto tls_fail; } }
+    if(mbedtls_ssl_get_verify_result(&c->ssl)!=0 && getenv("CMMC_TLS_INSECURE")==NULL){
+        snprintf(c->err,sizeof c->err,"TLS certificate verification failed"); goto tls_fail; }
+    c->tls_on = 1;
+    return 1;
+tls_fail:
+    mbedtls_ssl_free(&c->ssl);
+    if(c->have_conf){ mbedtls_ssl_config_free(&c->tconf); mbedtls_x509_crt_free(&c->tca); c->have_conf=0; }
+    return 0;
+}
+#endif
+
+static CmmValue mysql_connect_impl(CmmValue host, CmmValue port, CmmValue user,
+                                   CmmValue pass, CmmValue db,
+                                   int use_tls, const char *ca_pem){
     const char *h=cmm_to_string(host)->data;
     int p=(int)as_int(port);
     const char *u=cmm_to_string(user)->data;
@@ -2997,6 +3373,7 @@ CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue
         unsigned char salt[20];
         memcpy(salt,q,8); q+=8;           /* salt part 1 */
         q++;                              /* filler */
+        unsigned int cap_lo = (unsigned int)q[0] | ((unsigned int)q[1]<<8);
         q+=2;                             /* cap lower */
         q+=1;                             /* charset */
         q+=2;                             /* status */
@@ -3012,6 +3389,29 @@ CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue
         int haveDb = dbn && dbn[0];
         if(haveDb) cap |= 0x00000008u;
 
+        if(use_tls){
+#ifdef CMM_HAVE_TLS
+            if(!(cap_lo & 0x00000800u)){ snprintf(c->err,sizeof c->err,"server does not offer TLS"); goto fail; }
+            cap |= 0x00000800u;           /* CLIENT_SSL */
+            /* SSLRequest: the 32-byte prefix of the handshake response (no user) */
+            SB sr; sb_init(&sr);
+            unsigned char sh[4]; sh[0]=cap&0xff; sh[1]=(cap>>8)&0xff; sh[2]=(cap>>16)&0xff; sh[3]=(cap>>24)&0xff; sb_putn(&sr,(char*)sh,4);
+            unsigned char mp0[4]={0,0,0,1}; sb_putn(&sr,(char*)mp0,4);
+            char cs0=33; sb_putn(&sr,&cs0,1);
+            char z0[23]; memset(z0,0,23); sb_putn(&sr,z0,23);
+            c->seq=1;
+            int sok=my_write_packet(c,(unsigned char*)sr.p,sr.len); free(sr.p);
+            if(!sok){ snprintf(c->err,sizeof c->err,"could not send SSLRequest"); goto fail; }
+            if(!my_tls_wrap(c,h,ca_pem)) goto fail;   /* err already set */
+            c->seq=2;
+#else
+            snprintf(c->err,sizeof c->err,"TLS not compiled in"); goto fail;
+#endif
+        } else {
+            (void)cap_lo;
+            c->seq=1;
+        }
+
         SB rb; sb_init(&rb);
         unsigned char h4[4]; h4[0]=cap&0xff; h4[1]=(cap>>8)&0xff; h4[2]=(cap>>16)&0xff; h4[3]=(cap>>24)&0xff; sb_putn(&rb,(char*)h4,4);
         unsigned char mp[4]={0,0,0,1}; sb_putn(&rb,(char*)mp,4);
@@ -3021,7 +3421,6 @@ CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue
         { char l=(char)tlen; sb_putn(&rb,&l,1); if(tlen) sb_putn(&rb,(char*)token,tlen); }
         if(haveDb){ sb_put(&rb,dbn); char z=0; sb_putn(&rb,&z,1); }
         sb_put(&rb,"mysql_native_password"); { char z=0; sb_putn(&rb,&z,1); }
-        c->seq=1;
         int wok=my_write_packet(c,(unsigned char*)rb.p,rb.len); free(rb.p);
         if(!wok) goto fail;
     }
@@ -3035,10 +3434,24 @@ CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue
     if(pn>0 && (unsigned char)pl[0]==0xfe){ snprintf(c->err,sizeof c->err,"server requested auth-switch (only mysql_native_password supported)"); free(pl); goto fail; }
     if(pl) free(pl);
 fail:
+    snprintf(g_mysql_last_err,sizeof g_mysql_last_err,"%s",g_mysql[idx].err);
     my_tab_lock();
-    if(g_mysql[idx].used){ CLOSESOCK(g_mysql[idx].fd); g_mysql[idx].used=0; }
+    if(g_mysql[idx].used){
+#ifdef CMM_HAVE_TLS
+        if(g_mysql[idx].tls_on){ mbedtls_ssl_close_notify(&g_mysql[idx].ssl); mbedtls_ssl_free(&g_mysql[idx].ssl); }
+        if(g_mysql[idx].have_conf){ mbedtls_ssl_config_free(&g_mysql[idx].tconf); mbedtls_x509_crt_free(&g_mysql[idx].tca); }
+#endif
+        CLOSESOCK(g_mysql[idx].fd); g_mysql[idx].used=0;
+    }
     my_tab_unlock();
     return cmm_int(-1);
+}
+
+CmmValue cmm_mysql_connect(CmmValue host, CmmValue port, CmmValue user, CmmValue pass, CmmValue db){
+    return mysql_connect_impl(host,port,user,pass,db,0,NULL);
+}
+CmmValue cmm_mysql_connect_tls(CmmValue host, CmmValue port, CmmValue user, CmmValue pass, CmmValue db, CmmValue ca){
+    return mysql_connect_impl(host,port,user,pass,db,1,cmm_to_string(ca)->data);
 }
 
 static CmmValue my_run_query(MysqlConn *c, const char *sql, size_t sqllen){
@@ -3111,13 +3524,17 @@ CmmValue cmm_mysql_exec(CmmValue conn, CmmValue sql){
 }
 CmmValue cmm_mysql_insert_id(CmmValue conn){ int idx=(int)as_int(conn); if(idx<0||idx>=CMM_MYSQL_MAX||!g_mysql[idx].used) return cmm_int(0); return cmm_int((int64_t)g_mysql[idx].insert_id); }
 CmmValue cmm_mysql_affected(CmmValue conn){ int idx=(int)as_int(conn); if(idx<0||idx>=CMM_MYSQL_MAX||!g_mysql[idx].used) return cmm_int(0); return cmm_int((int64_t)g_mysql[idx].affected); }
-CmmValue cmm_mysql_error(CmmValue conn){ int idx=(int)as_int(conn); if(idx<0||idx>=CMM_MYSQL_MAX||!g_mysql[idx].used) return cmm_str(""); return cmm_str(g_mysql[idx].err); }
+CmmValue cmm_mysql_error(CmmValue conn){ int idx=(int)as_int(conn); if(idx<0||idx>=CMM_MYSQL_MAX||!g_mysql[idx].used) return cmm_str(g_mysql_last_err); return cmm_str(g_mysql[idx].err); }
 CmmValue cmm_mysql_close(CmmValue conn){
     int idx=(int)as_int(conn);
     if(idx<0||idx>=CMM_MYSQL_MAX||!g_mysql[idx].used) return cmm_bool(0);
     MysqlConn *c=&g_mysql[idx];
     my_tab_lock();
-    c->seq=0; unsigned char qb=0x01; my_write_packet(c,&qb,1);
+    c->seq=0; unsigned char qb=0x01; my_write_packet(c,&qb,1);   /* COM_QUIT */
+#ifdef CMM_HAVE_TLS
+    if(c->tls_on){ mbedtls_ssl_close_notify(&c->ssl); mbedtls_ssl_free(&c->ssl); c->tls_on=0; }
+    if(c->have_conf){ mbedtls_ssl_config_free(&c->tconf); mbedtls_x509_crt_free(&c->tca); c->have_conf=0; }
+#endif
     CLOSESOCK(c->fd); c->used=0;
     my_tab_unlock();
     return cmm_bool(1);

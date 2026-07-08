@@ -54,12 +54,12 @@ def namespace(name):
 PRIMITIVES = {"Int", "Float", "Bool", "String", "Data"}
 
 # Native "namespace" classes used as  Name.method(...)
-NATIVE_NAMESPACES = {"Console", "Math", "File", "Date", "Json", "Socket", "Http", "Sys", "Lambda", "Zip", "Crypto", "Base64", "Mysql", "Preg"}
+NATIVE_NAMESPACES = {"Console", "Math", "File", "Date", "Json", "Socket", "Http", "Sys", "Lambda", "Zip", "Crypto", "Base64", "Mysql", "Preg", "Serve"}
 
 # All native class names (for `use` validation; these need no file).
 NATIVE_CLASSES = {
     "String", "Int", "Float", "Bool", "List", "Dict", "Data", "Json",
-    "File", "Socket", "Console", "Date", "Math", "Job", "Http", "Sys", "Lambda", "Zip", "Crypto", "Base64", "Mysql", "Preg",
+    "File", "Socket", "Console", "Date", "Math", "Job", "Http", "Sys", "Lambda", "Zip", "Crypto", "Base64", "Mysql", "Preg", "Serve",
 }
 
 
@@ -129,17 +129,25 @@ NAMESPACE_METHODS = {
     ("Crypto", "sha1Hex"): ("cmm_crypto_sha1hex", STRING, 1),
     ("Crypto", "hmacSha256"): ("cmm_crypto_hmac_sha256", STRING, 2),
     ("Crypto", "hmacSha256Hex"): ("cmm_crypto_hmac_sha256_hex", STRING, 2),
+    ("Crypto", "hmacSha1"): ("cmm_crypto_hmac_sha1", STRING, 2),
+    ("Crypto", "hotp"): ("cmm_crypto_hotp", STRING, 3),
+    ("Crypto", "timingSafeEqual"): ("cmm_crypto_timing_safe_equal", BOOL, 2),
     ("Crypto", "hex"): ("cmm_crypto_hex", STRING, 1),
     ("Crypto", "randomHex"): ("cmm_crypto_random_hex", STRING, 1),
     ("Base64", "encode"): ("cmm_base64_encode", STRING, 1),
     ("Base64", "decode"): ("cmm_base64_decode", STRING, 1),
     ("Mysql", "connect"): ("cmm_mysql_connect", INT, 5),
+    ("Mysql", "connectTls"): ("cmm_mysql_connect_tls", INT, 6),
     ("Mysql", "query"): ("cmm_mysql_query", list_of(DATA), 2),
     ("Mysql", "exec"): ("cmm_mysql_exec", INT, 2),
     ("Mysql", "insertId"): ("cmm_mysql_insert_id", INT, 1),
     ("Mysql", "affected"): ("cmm_mysql_affected", INT, 1),
     ("Mysql", "error"): ("cmm_mysql_error", STRING, 1),
     ("Mysql", "close"): ("cmm_mysql_close", BOOL, 1),
+    ("Http", "parseRequest"): ("cmm_req_parse", DATA, 1),
+    ("Serve", "listen"): ("cmm_serve_listen", BOOL, 1),
+    ("Serve", "next"): ("cmm_serve_next", STRING, 0),
+    ("Serve", "respond"): ("cmm_serve_respond", BOOL, 1),
     ("Preg", "match"): ("cmm_preg_match", list_of(STRING), 2),
     ("Preg", "test"): ("cmm_preg_test", BOOL, 2),
     ("Preg", "matchAll"): ("cmm_preg_match_all", list_of(STRING), 2),

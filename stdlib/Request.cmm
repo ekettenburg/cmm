@@ -1,0 +1,21 @@
+class Request;
+
+// Ergonomic accessors over a normalized request produced by
+// Http.parseRequest(event). The request is a Data object shaped like:
+//   { method, path, query{}, headers{}, cookies{}, contentType,
+//     body, json, form{}, files[] }
+// where each file is { name, filename, contentType, size, data }.
+
+fn method(req: Data) -> String { v = req.getStr("method"); return v; }
+fn path(req: Data)   -> String { v = req.getStr("path");   return v; }
+fn body(req: Data)   -> String { v = req.getStr("body");   return v; }
+
+fn query(req: Data, key: String) -> String { q = req.get("query");   v = q.getStr(key); return v; }
+fn header(req: Data, key: String) -> String { h = req.get("headers"); v = h.getStr(key); return v; }
+fn cookie(req: Data, key: String) -> String { c = req.get("cookies"); v = c.getStr(key); return v; }
+fn form(req: Data, key: String)   -> String { f = req.get("form");    v = f.getStr(key); return v; }
+
+fn json(req: Data)  -> Data { j = req.get("json");  return j; }
+fn files(req: Data) -> Data { f = req.get("files"); return f; }
+
+fn isMethod(req: Data, m: String) -> Bool { cur = req.getStr("method"); r = cur == m; return r; }

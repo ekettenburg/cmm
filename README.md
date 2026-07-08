@@ -1,19 +1,19 @@
 # C-- (cmm)
 
 A small, statically-checked programming language that compiles to native
-executables. It lowers `.cmm` source to portable C99 and invokes your system
-C compiler (clang, gcc/MinGW, or MSVC) to produce a binary. **Windows is a
-first-class target** — threading and sockets are abstracted over Win32/Winsock
-and POSIX.
+executables. It lowers `.cmm` source to portable C99 and compiles it with
+**zig** — one toolchain that cross-compiles to every target from any host.
+**Windows is a first-class target** — threading and sockets are abstracted over
+Win32/Winsock and POSIX.
 
 ```
-Main.cmm  ──►  cmmc (lex ► parse ► analyze ► codegen)  ──►  Main.c
-Main.c + cmm_runtime.c  ──►  clang / gcc / cl  ──►  native executable
+Main.cmm  ──►  cmm (lex ► parse ► analyze ► codegen)  ──►  Main.c
+Main.c + cmm_runtime.c  ──►  zig cc  ──►  native executable
 ```
 
 There are **two interchangeable implementations of the same compiler**:
 
-* **`bootstrap/cmmc`** — a single native binary written in C. It has **no
+* **`bootstrap/cmm`** — a single native binary written in C. It has **no
   Python dependency**: the only thing it needs is the C compiler the toolchain
   already uses to link programs. The C-- runtime is embedded inside it, so the
   binary is fully self-contained (≈150 KB, libc-only). This is the recommended
@@ -27,42 +27,39 @@ There are **two interchangeable implementations of the same compiler**:
 Build the compiler once (needs only a C compiler), then use it:
 
 ```sh
-cd bootstrap && ./build_cmmc.sh        # produces ./cmmc   (Windows: build_cmmc.bat)
+cd bootstrap && ./build_cmm.sh          # produces ./cmm    (Windows: build_cmm.bat)
 
-./cmmc run   examples/Hello.cmm
-./cmmc build examples/Demo.cmm -o demo
+./cmm run   examples/Hello.cmm
+./cmm build examples/Demo.cmm -o demo
 ```
 
-`bootstrap/cmmc` is a drop-in replacement for `python3 -m cmmc`: same
+`bootstrap/cmm` is a drop-in replacement for `python3 -m cmmc`: same
 `build` / `run` / `emit` / `version` commands and the same flags.
 
 ## Portable Windows package
 
 The `cmm-win64` package runs on any Windows box with **no Python and no admin**,
 but — because cmm compiles through C — it does need a **C compiler** available.
-You can either bundle one next to `cmmc.exe` or put one on `PATH`:
+You can either bundle one next to `cmm.exe` or put one on `PATH`:
 
 ```
 cmm-win64\
-  cmmc.exe      compiler (C-- runtime embedded)
+  cmm.exe        compiler (C-- runtime embedded)
   bin\           optional: drop gcc.exe (+DLLs) or tcc.exe here to bundle a backend
   third_party\     vendored mbedTLS (out-of-the-box HTTPS, compiled by zig)
   examples\  stdlib\
-  src\           full source + build_cmmc.bat to rebuild cmmc.exe on Windows
+  src\           full source + build_cmm.bat to rebuild cmm.exe on Windows
   README.txt     setup steps
 ```
 
-Resolution order for the backend: `--cc <path>` → `%CMMC_CC%` → bundled
-`<dir>\bin\{gcc,clang,cc,tcc}.exe` (which also adds `<dir>\include` and
-`<dir>\lib`) → a compiler on `PATH` (gcc/clang, or MSVC `cl` in a Developer
-Prompt). Confirm with `cmmc build foo.cmm -v` — it prints the chosen compiler
-and whether it was `bundled`. The easiest backend is a portable MinGW-w64
-(w64devkit or WinLibs): unzip it and add its `bin\` to `PATH`, or copy `gcc.exe`
-into the package's `bin\`.
+Backend resolution: `--cc <path>` → `$CMMC_CC` → **zig** (`zig` on `PATH`,
+`$CMMC_ZIG`, or the `ziglang` pip package). Confirm with `cmm build foo.cmm -v`
+— it prints the exact `zig cc` command. Install zig with `pip install ziglang`
+(Windows, macOS, Linux) or grab a build from ziglang.org.
 
 `bash bootstrap/make_win_package.sh` stages `dist/cmm-win64/` (cross-builds
-`cmmc.exe` when a MinGW cross-compiler is present) and includes the `src\` build
-kit. More detail — portable MinGW-w64/TinyCC and the bundled TLS — is in
+`cmm.exe` with `zig cc -target x86_64-windows-gnu`) and includes the `src\`
+build kit. More detail on the bundled TLS is in
 **`bootstrap/PACKAGING-windows.md`**.
 
 ## Quick start (Python reference)
@@ -79,13 +76,14 @@ python -m cmmc run examples\Hello.cmm
 build.bat run examples\Hello.cmm
 ```
 
-CLI (both implementations):
+CLI (same flags on both implementations — `cmm` natively, `python -m cmmc` for
+the Python reference):
 
 ```
-cmmc build <file.cmm> [-o OUT] [--emit-c] [--keep-c] [--tls|--no-tls] [-v]
-cmmc run   <file.cmm> [-v] [-- ARGS...]
-cmmc emit  <file.cmm>          # write generated C and stop
-cmmc version
+cmm build <file.cmm> [-o OUT] [--emit-c] [--keep-c] [--tls|--no-tls] [-v]
+cmm run   <file.cmm> [-v] [-- ARGS...]
+cmm emit  <file.cmm>          # write generated C and stop
+cmm version
 ```
 
 The entry file's class is the program entry point; its `main()` method runs at
@@ -94,11 +92,11 @@ startup. `use OtherClass;` pulls in `OtherClass.cmm` from the same directory.
 ## Editor support & debugging
 
 A **VS Code extension** lives in [`editor/vscode/`](editor/vscode/): syntax
-highlighting plus live diagnostics that run `cmmc check` and surface compiler
+highlighting plus live diagnostics that run `cmm check` and surface compiler
 errors in the Problems panel as you type. Copy it into
 `~/.vscode/extensions/` (see its README) or package it with `vsce`.
 
-`cmmc check <file.cmm>` type-checks a file and prints `file:line:col: error: …`
+`cmm check <file.cmm>` type-checks a file and prints `file:line:col: error: …`
 diagnostics without building; reports every error it finds in one pass — handy for editors and CI.
 
 Build or run with **`--debug` / `-g`** for great debug output: `-O0`, DWARF
@@ -135,7 +133,7 @@ One backend, every host. Install zig once (`pip install ziglang`, same on
 Windows and Linux), then cross-compile a Lambda `bootstrap`:
 
 ```
-cmmc build handler.cmm -o bootstrap --target al2023
+cmm build handler.cmm -o bootstrap --target al2023
 ```
 
 It produces an x86-64 ELF pinned to glibc 2.34 (AL2023's version) that runs on
@@ -284,7 +282,7 @@ A compiled binary receives them directly (`./myprog one two`). When using the
 `run` subcommand, pass program arguments after `--`:
 
 ```
-cmmc run examples/Args.cmm -- one two three
+cmm run examples/Args.cmm -- one two three
 ```
 
 **Not yet provided:** `map`/`filter`/`reduce` and other callback-based helpers —
@@ -328,11 +326,11 @@ implementation. See `examples/JsonDemo.cmm` for a full decode → navigate → m
 
 ```
 bootstrap/             native C compiler (no Python dependency)
-  cmmc.c              the whole frontend in one file (lexer..codegen..driver)
+  cmm.c                the whole frontend in one file (lexer..codegen..driver)
   embed.c              embeds the runtime into the binary
   embedded_runtime.h   generated: runtime sources as byte arrays
-  build_cmmc.sh/.bat  build the native compiler (needs only a C compiler)
-  cmmc                the built binary
+  build_cmm.sh/.bat   build the native compiler (needs only a C compiler)
+  cmm                  the built binary
 cmmc/                 Python compiler package (reference / oracle)
   lexer.py             tokenizer
   parser.py            recursive-descent parser (enforces the grouping rule)
@@ -352,15 +350,26 @@ build.sh / build.bat   convenience wrappers
 
 ## Building on Windows
 
-`cmmc` auto-detects the compiler. Any one of these works:
+`cmm` compiles through zig, so the only prerequisite is zig itself:
 
-- **MinGW-w64** (gcc): install via MSYS2 (`pacman -S mingw-w64-x86_64-gcc`) and
-  put it on PATH. cmmc links `-lws2_32` for sockets automatically.
-- **clang**: install LLVM and ensure `clang` is on PATH.
-- **MSVC**: open a *Developer Command Prompt for VS* so `cl` is available;
-  cmmc passes `ws2_32.lib` automatically.
+- Install it with `pip install ziglang`, or download a build from ziglang.org
+  and put `zig` on PATH (or point `CMMC_ZIG` at it).
+- cmm links `-lws2_32 -ladvapi32` (and `-lbcrypt` for TLS) automatically.
 
-Then `python -m cmmc build examples\Demo.cmm` produces `Demo.exe`.
+Then `python -m cmmc build examples\Demo.cmm` produces `Demo.exe`. The same
+`zig cc` toolchain cross-compiles to Windows from Linux/macOS too, via
+`cmm build app.cmm --target windows-x64`.
+
+
+## Build cache
+
+`cmm` caches the compiled runtime object and the vendored TLS library per
+target under `~/.cache/cmm` (Linux/macOS) or `%LOCALAPPDATA%\cmm\cache`
+(Windows), or `$CMMC_CACHE` if set. The first build of a target compiles the
+runtime and (if used) mbedTLS; subsequent builds reuse them, so edit-rebuild
+cycles are typically tens of milliseconds instead of seconds. The cache keys on
+a hash of the runtime source and TLS config, so it self-invalidates when those
+change; delete the cache dir to force a clean rebuild.
 
 ## How it works
 

@@ -34,7 +34,7 @@ Command-line arguments reach a compiled binary directly (`./prog one two`).
 Through the `run` subcommand, pass them after `--`:
 
 ```
-cmmc run examples/Args.cmm -- one two three
+cmm run examples/Args.cmm -- one two three
 ```
 
 ## __FILE__ and __DIR__

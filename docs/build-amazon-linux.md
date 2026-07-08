@@ -1,7 +1,7 @@
 # Building for Amazon Linux 2023 (AWS Lambda)
 
 cmm uses **one** C backend everywhere: [zig](https://ziglang.org). The same
-`cmmc` on Windows or Linux can produce a native host binary *and* cross-compile
+`cmm` on Windows or Linux can produce a native host binary *and* cross-compile
 a binary for Amazon Linux 2023 — the OS behind the Lambda `provided.al2023`
 runtime. No Docker, no per-platform toolchain juggling.
 
@@ -14,13 +14,13 @@ identically on Windows and Linux:
 pip install ziglang
 ```
 
-`cmmc` auto-discovers it (it also accepts a real `zig` on `PATH`, or
+`cmm` auto-discovers it (it also accepts a real `zig` on `PATH`, or
 `CMMC_ZIG=/path/to/zig`). That's the only prerequisite.
 
 ## 2. Build for Amazon Linux 2023
 
 ```
-cmmc build handler.cmm -o bootstrap --target al2023
+cmm build handler.cmm -o bootstrap --target al2023
 ```
 
 This emits an x86-64 ELF linked against **glibc 2.34** — exactly what AL2023
@@ -44,7 +44,7 @@ Lambda's custom runtime expects the executable to be named `bootstrap`, so use
 (see [`lib-lambda.md`](lib-lambda.md) and [`lib-zip.md`](lib-zip.md)):
 
 ```
-cmmc run deploy.cmm        # File.read -> Zip.build -> SigV4 -> Lambda.create/updateCode
+cmm run deploy.cmm        # File.read -> Zip.build -> SigV4 -> Lambda.create/updateCode
 ```
 
 …or use the AWS CLI:
@@ -92,5 +92,5 @@ handler), pass `--no-tls`.
 One download, every host OS, every Lambda arch, no sysroot wrangling, and it
 pins the glibc version so binaries built on a newer dev machine still run on
 AL2023. It also doubles as cmm's normal host compiler — if zig is installed,
-`cmmc build foo.cmm` uses it for local builds too, so there is genuinely just
+`cmm build foo.cmm` uses it for local builds too, so there is genuinely just
 one toolchain to think about.
