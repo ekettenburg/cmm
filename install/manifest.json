@@ -1,6 +1,6 @@
 {
   "cmm": {
-    "url": "https://github.com/ekettenburg/cmm/archive/refs/heads/main.zip"
+    "url": "https://codeload.github.com/ekettenburg/cmm/zip/refs/heads/main"
   },
   "zig": {
     "linux-x86_64":   "https://ziglang.org/builds/zig-x86_64-linux-0.17.0-dev.1158+1d1193aa7.tar.xz",
